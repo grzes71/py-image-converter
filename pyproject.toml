@@ -1,0 +1,31 @@
+[project]
+name = "atari-image-converter"
+version = "0.1.0"
+description = "High-quality PNG/JPG/BMP/GIF to Atari 8-bit graphics converter"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=1.26",
+    "Pillow>=10.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.4",
+]
+
+[project.scripts]
+atari-convert = "converter.main:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.setuptools]
+packages = ["converter"]
+
