@@ -2,4 +2,5 @@
 /.venv/
 /output/
 /atari_image_converter.egg-info/
-
+__pycache__/
+dist/

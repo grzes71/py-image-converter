@@ -11,7 +11,13 @@ param(
     [string]$InputFile,
 
     [Parameter(Mandatory = $true)]
-    [string]$OutputDir
+    [string]$OutputDir,
+
+    [Parameter(Mandatory = $true)]
+    [int]$Height,
+
+    [Parameter(Mandatory = $true)]
+    [int]$Width
 )
 
 # Utwórz katalog wyjściowy, jeśli nie istnieje
@@ -80,6 +86,8 @@ foreach ($palette in $palettes)
                     --dither $dither `
                     --resize $resize `
                     --quantizer $quantizer `
+                    --height $Height `
+                    --width $Width `
                     $InputFile `
                     $OutputFile
             }
