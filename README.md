@@ -125,6 +125,49 @@ If you run with `--preview`, the converter generates a dedicated directory `<out
 
 ---
 
+## Batch Generation Script (PowerShell)
+
+For generating many conversion variants at once (all palette + dither + resize + quantizer combinations), use `generate-images.ps1`.
+
+### Required Parameters
+
+- `-InputFile`: Input image path.
+- `-OutputDir`: Output directory for generated images.
+- `-Height`: Output height passed to CLI as `--height`.
+- `-Width`: Output width passed to CLI as `--width`.
+
+### Example
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\generate-images.ps1 -InputFile "C:\temp\image.png" -OutputDir "C:\temp\out" -Height 192 -Width 160
+```
+
+The script invokes `python -m converter.main` for each algorithm combination and writes `.png` files to the selected output directory.
+
+---
+
+## Release Automation (GitHub Actions)
+
+This repository includes a workflow at `.github/workflows/release-on-pr-close.yml` that creates a GitHub Release with a downloadable `.whl` package whenever a pull request is closed.
+
+### Workflow Summary
+
+- Trigger: `pull_request` with type `closed`.
+- Build: sets up Python 3.12 and runs `python -m build --wheel`.
+- Release: publishes a GitHub Release and attaches `dist/*.whl`.
+- Source commit:
+    - merged PR: uses merge commit SHA,
+    - non-merged closed PR: falls back to PR head SHA.
+
+Generated release tag format:
+
+```text
+pr-<PR_NUMBER>-closed-<RUN_NUMBER>
+```
+
+---
+
 ## Project Structure & Architecture
 
 ```
