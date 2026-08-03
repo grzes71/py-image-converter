@@ -1,6 +1,10 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "atari-image-converter"
-version = "0.1.0"
+version = "0.1.1"
 description = "High-quality PNG/JPG/BMP/GIF to Atari 8-bit graphics converter"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -26,6 +30,7 @@ pythonpath = ["."]
 line-length = 100
 target-version = "py312"
 
-[tool.setuptools]
-packages = ["converter"]
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["converter*"]
 
