@@ -1,6 +1,7 @@
 /.pytest_cache/
 /.venv/
 /output/
-/atari_image_converter.egg-info/
+/build/
+*.egg-info/
 __pycache__/
 dist/
