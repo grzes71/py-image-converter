@@ -149,21 +149,31 @@ The script invokes `python -m converter.main` for each algorithm combination and
 
 ## Release Automation (GitHub Actions)
 
-This repository includes a workflow at `.github/workflows/release-on-pr-close.yml` that creates a GitHub Release with a downloadable `.whl` package whenever a pull request is closed.
+This repository includes a workflow at `.github/workflows/release-on-pr-close.yml` that creates a GitHub Release with downloadable `.whl` and `.tar.gz` artifacts whenever a pull request is closed.
+
+## Versioning
+
+Versioning is tag-driven.
+
+- `pyproject.toml` uses dynamic version metadata via `setuptools-scm` (no static `project.version` field).
+- The release workflow calculates the next semantic version from existing tags matching `vX.Y.Z`.
+- Bump level is inferred from merged PR commit messages:
+    - `feat!` or `BREAKING CHANGE` -> major
+    - `feat` -> minor
+    - `fix` / `perf` / `refactor` / `revert` -> patch
+- The workflow creates and pushes the new tag (`vMAJOR.MINOR.PATCH`), then builds and publishes release artifacts from that tag.
 
 ### Workflow Summary
 
 - Trigger: `pull_request` with type `closed`.
-- Build: sets up Python 3.12 and runs `python -m build --wheel`.
-- Release: publishes a GitHub Release and attaches `dist/*.whl`.
-- Source commit:
-    - merged PR: uses merge commit SHA,
-    - non-merged closed PR: falls back to PR head SHA.
+- Condition: runs only when the PR was merged into `main`.
+- Build: sets up Python 3.12 and runs `python -m build`.
+- Release: publishes a GitHub Release and attaches `dist/*.whl` and `dist/*.tar.gz`.
 
 Generated release tag format:
 
 ```text
-pr-<PR_NUMBER>-closed-<RUN_NUMBER>
+v<MAJOR>.<MINOR>.<PATCH>
 ```
 
 ---

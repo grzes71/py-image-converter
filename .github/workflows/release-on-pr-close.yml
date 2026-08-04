@@ -115,7 +115,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Bump version in pyproject.toml
+      - name: Compute next version from tags
         id: bump
         env:
           BUMP_LEVEL: ${{ needs.determine-release.outputs.bump_level }}
@@ -123,17 +123,23 @@ jobs:
           python - <<'PY'
           import os
           import re
+          import subprocess
           from pathlib import Path
 
           bump_level = os.environ["BUMP_LEVEL"].strip()
-          pyproject = Path("pyproject.toml")
-          content = pyproject.read_text(encoding="utf-8")
 
-          match = re.search(r'(?m)^version\s*=\s*"(\d+)\.(\d+)\.(\d+)"\s*$', content)
-          if not match:
-              raise SystemExit("Could not find [project].version in pyproject.toml")
+          tags = subprocess.check_output(["git", "tag", "--list", "v*"], text=True).splitlines()
+          versions = []
+          for tag in tags:
+            match = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)", tag.strip())
+            if match:
+              versions.append(tuple(map(int, match.groups())))
 
-          major, minor, patch = map(int, match.groups())
+          if versions:
+            major, minor, patch = max(versions)
+          else:
+            major, minor, patch = (0, 0, 0)
+
           old_version = f"{major}.{minor}.{patch}"
 
           if bump_level == "major":
@@ -149,8 +155,6 @@ jobs:
               raise SystemExit(f"Unsupported bump level: {bump_level}")
 
           new_version = f"{major}.{minor}.{patch}"
-          updated = content[: match.start()] + f'version = "{new_version}"' + content[match.end() :]
-          pyproject.write_text(updated, encoding="utf-8")
 
           out = Path(".github_release_vars")
           out.write_text(
@@ -161,14 +165,17 @@ jobs:
 
           cat .github_release_vars >> "$GITHUB_OUTPUT"
 
-      - name: Commit version bump
+      - name: Create and push release tag
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add pyproject.toml
-          git commit -m "chore(release): v${{ steps.bump.outputs.new_version }}"
+
+          if git rev-parse "v${{ steps.bump.outputs.new_version }}" >/dev/null 2>&1; then
+            echo "Tag v${{ steps.bump.outputs.new_version }} already exists"
+            exit 1
+          fi
+
           git tag "v${{ steps.bump.outputs.new_version }}"
-          git push origin HEAD
           git push origin "v${{ steps.bump.outputs.new_version }}"
 
       - name: Build release artifacts
