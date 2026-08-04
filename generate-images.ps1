@@ -20,6 +20,8 @@ param(
     [int]$Width
 )
 
+$env:PYTHONPATH = "src"
+
 # Utwórz katalog wyjściowy, jeśli nie istnieje
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 

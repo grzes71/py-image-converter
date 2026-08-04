@@ -91,16 +91,40 @@ def test_xex_segments_and_dlist_mode_e(tmp_path: Path) -> None:
 
     s0_start, s0_end, s0_payload = segments[0]
     assert s0_start == 0x4000
-    assert s0_end == 0x5DFF
-    assert len(s0_payload) == 7680
+    assert s0_end == 0x5E0F
+    assert len(s0_payload) == 7696
 
     _, _, dlist = segments[1]
     assert dlist[:3] == bytes([0x70, 0x70, 0x70])
     assert dlist[3:6] == bytes([0x4E, 0x00, 0x40])
-    assert dlist[6 : 6 + 95] == bytes([0x0E] * 95)
-    second_lms = 6 + 95
-    assert dlist[second_lms : second_lms + 3] == bytes([0x4E, 0x00, 0x4F])
-    assert dlist[second_lms + 3 : second_lms + 3 + 95] == bytes([0x0E] * 95)
+    assert dlist[6 : 6 + 101] == bytes([0x0E] * 101)
+    second_lms = 6 + 101
+    assert dlist[second_lms : second_lms + 3] == bytes([0x4E, 0x00, 0x50])
+    assert dlist[second_lms + 3 : second_lms + 3 + 89] == bytes([0x0E] * 89)
+    assert dlist[-3:] == bytes([0x41, 0x00, 0x3E])
+
+
+def test_xex_segments_and_dlist_mode_e_160x190(tmp_path: Path) -> None:
+    indexed = np.zeros((190, 160), dtype=np.uint8)
+    path = tmp_path / "screen_e_190.xex"
+    export_xex(indexed, path, antic_mode="E")
+
+    data = path.read_bytes()
+    segments = _parse_xex_segments(data)
+    assert len(segments) == 4
+
+    s0_start, s0_end, s0_payload = segments[0]
+    assert s0_start == 0x4000
+    assert s0_end == 0x5DBF
+    assert len(s0_payload) == 7616
+
+    _, _, dlist = segments[1]
+    assert dlist[:3] == bytes([0x70, 0x70, 0x70])
+    assert dlist[3:6] == bytes([0x4E, 0x00, 0x40])
+    assert dlist[6 : 6 + 101] == bytes([0x0E] * 101)
+    second_lms = 6 + 101
+    assert dlist[second_lms : second_lms + 3] == bytes([0x4E, 0x00, 0x50])
+    assert dlist[second_lms + 3 : second_lms + 3 + 87] == bytes([0x0E] * 87)
     assert dlist[-3:] == bytes([0x41, 0x00, 0x3E])
 
 
@@ -116,14 +140,14 @@ def test_xex_segments_and_dlist_mode_f(tmp_path: Path) -> None:
 
     s0_start, s0_end, s0_payload = segments[0]
     assert s0_start == 0x4000
-    assert s0_end == 0x5DFF
-    assert len(s0_payload) == 7680
+    assert s0_end == 0x5E0F
+    assert len(s0_payload) == 7696
 
     _, _, dlist = segments[1]
     assert dlist[:3] == bytes([0x70, 0x70, 0x70])
     assert dlist[3:6] == bytes([0x4F, 0x00, 0x40])
-    assert dlist[6 : 6 + 95] == bytes([0x0F] * 95)
-    second_lms = 6 + 95
-    assert dlist[second_lms : second_lms + 3] == bytes([0x4F, 0x00, 0x4F])
-    assert dlist[second_lms + 3 : second_lms + 3 + 95] == bytes([0x0F] * 95)
+    assert dlist[6 : 6 + 101] == bytes([0x0F] * 101)
+    second_lms = 6 + 101
+    assert dlist[second_lms : second_lms + 3] == bytes([0x4F, 0x00, 0x50])
+    assert dlist[second_lms + 3 : second_lms + 3 + 89] == bytes([0x0F] * 89)
     assert dlist[-3:] == bytes([0x41, 0x00, 0x3E])
