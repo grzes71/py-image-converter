@@ -33,6 +33,18 @@ This installs dependencies such as `numpy`, `Pillow`, `pytest`, and `ruff`.
 
 You can run the tool using the CLI wrapper [convert.py](file:///c:/Users/grzes/Documents/Projects/py-image-converter/convert.py).
 
+You can also run it as a Python module:
+
+```bash
+python -m converter input.png output.bin
+```
+
+Equivalent module form:
+
+```bash
+python -m converter.main input.png output.bin
+```
+
 ### Basic Conversion
 Convert an image to a raw Atari `.bin` file (which is the default format):
 ```bash
