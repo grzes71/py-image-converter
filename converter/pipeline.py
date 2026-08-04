@@ -100,7 +100,7 @@ def export_result(
             exported.append(p)
         elif fmt == ExportFormat.XEX:
             p = parent / f"{stem}.xex"
-            export_xex(result.indexed, p)
+            export_xex(result.indexed, p, palette_indices=result.palette_indices)
             exported.append(p)
 
     if config.preview:

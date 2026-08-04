@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from converter.config import load_config, save_config
+from converter.exporters.xex_export import export_xex
 from converter.pipeline import run_conversion
 from converter.types import (
     ConversionConfig,
@@ -27,6 +28,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--width", type=int, default=160, help="Output width (default: 160)")
     parser.add_argument("--height", type=int, default=192, help="Output height (default: 192)")
     parser.add_argument("--mode", default="ANTIC_E", help="Atari mode (default: ANTIC_E)")
+    parser.add_argument(
+        "-x",
+        "--xex",
+        help="Explicit output path for Atari executable preview (.xex)",
+    )
+    parser.add_argument(
+        "-m",
+        "--antic-mode",
+        choices=["D", "E", "F", "7", "15", "8"],
+        help="ANTIC mode for XEX preview (D/E/F or BASIC equivalents 7/15/8)",
+    )
     parser.add_argument(
         "--palette",
         choices=[p.value for p in PaletteMethod],
@@ -115,7 +127,16 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Error: input file not found: {input_path}", file=sys.stderr)
         return 1
 
-    run_conversion(input_path, args.output, config)
+    result = run_conversion(input_path, args.output, config)
+
+    if args.xex:
+        export_xex(
+            result.indexed,
+            args.xex,
+            palette_indices=result.palette_indices,
+            antic_mode=args.antic_mode,
+        )
+
     return 0
 
 
