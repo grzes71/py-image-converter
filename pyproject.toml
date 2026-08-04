@@ -23,15 +23,15 @@ dev = [
 atari-convert = "converter.main:main"
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
-pythonpath = ["."]
+testpaths = ["src/tests"]
+pythonpath = ["src"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py312"
 
 [tool.setuptools.packages.find]
-where = ["."]
+where = ["src"]
 include = ["converter*"]
 
 [tool.setuptools_scm]
