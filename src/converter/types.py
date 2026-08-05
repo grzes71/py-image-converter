@@ -35,6 +35,12 @@ class DitherMethod(str, Enum):
     BAYER4 = "bayer4"
     BAYER8 = "bayer8"
     ADAPTIVE = "adaptive"
+    ATARI_FALSE_FLOYD = "atari_false_floyd"
+    ATARI_TWO_ROW_SIERRA = "atari_two_row_sierra"
+    ATARI_DIAGONAL = "atari_diagonal"
+    ATARI_BAYER2V2 = "atari_bayer2v2"
+    ATARI_BAYER2X4 = "atari_bayer2x4"
+    ATARI_NON_RECTANGULAR8 = "atari_non_rectangular8"
 
 
 class PaletteMethod(str, Enum):
