@@ -7,15 +7,21 @@ from numpy.typing import NDArray
 
 from converter.algorithms.atkinson import Atkinson
 from converter.algorithms.bayer2 import Bayer2
+from converter.algorithms.bayer2v2 import Bayer2v2
+from converter.algorithms.bayer2x4 import Bayer2x4
 from converter.algorithms.bayer4 import Bayer4
 from converter.algorithms.bayer8 import Bayer8
 from converter.algorithms.base import DitherAlgorithm
 from converter.algorithms.burkes import Burkes
+from converter.algorithms.diagonal import Diagonal
+from converter.algorithms.false_floyd import FalseFloydSteinberg
 from converter.algorithms.floyd import FloydSteinberg
 from converter.algorithms.jarvis import Jarvis
+from converter.algorithms.non_rectangular8 import NonRectangular8
 from converter.algorithms.sierra import Sierra
 from converter.algorithms.sierra_lite import SierraLite
 from converter.algorithms.stucki import Stucki
+from converter.algorithms.two_row_sierra import TwoRowSierra
 from converter.histogram import compute_gradient_magnitude, compute_local_variance
 from converter.quantizer import quantize_nearest
 from converter.types import DitherMethod, EdgeMask, RGBImage
@@ -48,6 +54,12 @@ _DITHER_REGISTRY: dict[DitherMethod, DitherAlgorithm] = {
     DitherMethod.BAYER2: Bayer2(),
     DitherMethod.BAYER4: Bayer4(),
     DitherMethod.BAYER8: Bayer8(),
+    DitherMethod.ATARI_FALSE_FLOYD: FalseFloydSteinberg(),
+    DitherMethod.ATARI_TWO_ROW_SIERRA: TwoRowSierra(),
+    DitherMethod.ATARI_DIAGONAL: Diagonal(),
+    DitherMethod.ATARI_BAYER2V2: Bayer2v2(),
+    DitherMethod.ATARI_BAYER2X4: Bayer2x4(),
+    DitherMethod.ATARI_NON_RECTANGULAR8: NonRectangular8(),
 }
 
 

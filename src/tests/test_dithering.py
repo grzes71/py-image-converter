@@ -5,13 +5,19 @@ import numpy as np
 from converter.algorithms import (
     Atkinson,
     Bayer2,
+    Bayer2v2,
+    Bayer2x4,
     Bayer4,
     Bayer8,
     Burkes,
+    Diagonal,
+    FalseFloydSteinberg,
     Jarvis,
+    NonRectangular8,
     Sierra,
     SierraLite,
     Stucki,
+    TwoRowSierra,
 )
 
 
@@ -25,5 +31,21 @@ def _run_algo(algo, size: int = 8) -> None:
 
 
 def test_all_dither_algorithms() -> None:
-    for algo in [Atkinson(), Bayer2(), Bayer4(), Bayer8(), Burkes(), Jarvis(), Sierra(), SierraLite(), Stucki()]:
+    for algo in [
+        Atkinson(),
+        Bayer2(),
+        Bayer2v2(),
+        Bayer2x4(),
+        Bayer4(),
+        Bayer8(),
+        Burkes(),
+        Diagonal(),
+        FalseFloydSteinberg(),
+        Jarvis(),
+        NonRectangular8(),
+        Sierra(),
+        SierraLite(),
+        Stucki(),
+        TwoRowSierra(),
+    ]:
         _run_algo(algo)
