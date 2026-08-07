@@ -71,12 +71,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--metrics", action="store_true", help="Print quality metrics")
     parser.add_argument(
         "--export",
-        nargs="+",
+        action="append",
         choices=[e.value for e in ExportFormat],
-        help="Export formats (default: inferred from output extension)",
+        help="Export format (repeat for multiple, e.g. --export asm --export xex; default: inferred from output extension)",
     )
     parser.add_argument("--config", help="Load settings from JSON config file")
     parser.add_argument("--save-config", help="Save current settings to JSON file")
+    parser.add_argument(
+        "--atari-colors",
+        type=str,
+        default=None,
+        help="Override color registers in XEX output (comma-separated hex, e.g. 0x00,0x04,0x0a,0x0e)",
+    )
     return parser
 
 
@@ -92,12 +98,37 @@ def _infer_export_format(output: Path) -> ExportFormat:
     return ext_map.get(output.suffix.lower(), ExportFormat.BIN)
 
 
+def _parse_atari_colors(raw: str | None) -> list[int] | None:
+    """Parse a comma-separated hex color string like '0x00,0x04,0x0a,0x0e'."""
+    if raw is None:
+        return None
+    colors: list[int] = []
+    for token in raw.split(","):
+        token = token.strip()
+        if not token:
+            raise ValueError("Empty color value in --atari-colors")
+        colors.append(int(token, 16))
+    if not colors:
+        raise ValueError("--atari-colors requires at least one value")
+    return colors
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
+    atari_colors = None
+    if args.atari_colors is not None:
+        try:
+            atari_colors = _parse_atari_colors(args.atari_colors)
+        except ValueError as exc:
+            print(f"Error parsing --atari-colors: {exc}", file=sys.stderr)
+            return 1
+
     if args.config:
         config = load_config(args.config)
+        if atari_colors is not None:
+            config.atari_colors = atari_colors
     else:
         export_formats = [ExportFormat(e) for e in args.export] if args.export else None
         if export_formats is None:
@@ -117,6 +148,7 @@ def main(argv: list[str] | None = None) -> int:
             preview=args.preview,
             metrics=args.metrics,
             export_formats=export_formats,
+            atari_colors=atari_colors,
         )
 
     if args.save_config:
@@ -135,6 +167,7 @@ def main(argv: list[str] | None = None) -> int:
             args.xex,
             palette_indices=result.palette_indices,
             antic_mode=args.antic_mode,
+            atari_colors=atari_colors,
         )
 
     return 0

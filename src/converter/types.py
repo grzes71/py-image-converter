@@ -157,9 +157,10 @@ class ConversionConfig:
     preview: bool = False
     metrics: bool = False
     export_formats: list[ExportFormat] = field(default_factory=lambda: [ExportFormat.BIN])
+    atari_colors: list[int] | None = None
 
     def to_dict(self) -> dict:
-        return {
+        result = {
             "mode": self.mode.value,
             "width": self.width,
             "height": self.height,
@@ -175,6 +176,9 @@ class ConversionConfig:
             "metrics": self.metrics,
             "export": [f.value for f in self.export_formats],
         }
+        if self.atari_colors is not None:
+            result["atari_colors"] = self.atari_colors
+        return result
 
     @classmethod
     def from_dict(cls, data: dict) -> ConversionConfig:
@@ -196,4 +200,5 @@ class ConversionConfig:
             preview=bool(data.get("preview", False)),
             metrics=bool(data.get("metrics", False)),
             export_formats=[ExportFormat(f) for f in export_raw],
+            atari_colors=data.get("atari_colors"),
         )
