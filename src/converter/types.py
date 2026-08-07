@@ -158,6 +158,7 @@ class ConversionConfig:
     metrics: bool = False
     export_formats: list[ExportFormat] = field(default_factory=lambda: [ExportFormat.BIN])
     atari_colors: list[int] | None = None
+    label_name: str | None = None
 
     def to_dict(self) -> dict:
         result = {
@@ -178,6 +179,8 @@ class ConversionConfig:
         }
         if self.atari_colors is not None:
             result["atari_colors"] = self.atari_colors
+        if self.label_name is not None:
+            result["label_name"] = self.label_name
         return result
 
     @classmethod
@@ -201,4 +204,5 @@ class ConversionConfig:
             metrics=bool(data.get("metrics", False)),
             export_formats=[ExportFormat(f) for f in export_raw],
             atari_colors=data.get("atari_colors"),
+            label_name=data.get("label_name"),
         )
