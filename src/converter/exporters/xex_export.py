@@ -188,8 +188,14 @@ def _build_dlist(
     return dlist
 
 
-def _build_init_routine(palette_indices: list[int] | None) -> bytearray:
-    palette = list(palette_indices or [])[:5]
+def _build_init_routine(
+    palette_indices: list[int] | None,
+    atari_colors: list[int] | None = None,
+) -> bytearray:
+    if atari_colors is not None:
+        palette = list(atari_colors)[:5]
+    else:
+        palette = list(palette_indices or [])[:5]
     while len(palette) < 5:
         palette.append(0)
 
@@ -240,6 +246,7 @@ def export_xex(
     path: str | Path,
     palette_indices: list[int] | None = None,
     antic_mode: str | None = None,
+    atari_colors: list[int] | None = None,
 ) -> None:
     """Export an executable Atari XEX viewer for ANTIC D/E/F image preview."""
     path = Path(path)
@@ -257,7 +264,7 @@ def export_xex(
         vram_data = _pack_1bpp(indexed, width=w, height=h, pad_4kb=True)
 
     dlist = _build_dlist(mode, height=h, width=w, pad_4kb=True)
-    init_routine = _build_init_routine(palette_indices)
+    init_routine = _build_init_routine(palette_indices, atari_colors=atari_colors)
 
     chunks = bytearray(_XEX_MAGIC)
     _append_segment(chunks, _VRAM_ADDR, vram_data)

@@ -100,7 +100,11 @@ def export_result(
             exported.append(p)
         elif fmt == ExportFormat.XEX:
             p = parent / f"{stem}.xex"
-            export_xex(result.indexed, p, palette_indices=result.palette_indices)
+            export_xex(
+                result.indexed, p,
+                palette_indices=result.palette_indices,
+                atari_colors=config.atari_colors,
+            )
             exported.append(p)
 
     if config.preview:

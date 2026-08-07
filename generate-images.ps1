@@ -5,6 +5,8 @@
 #.\run_all.ps1 `
 #    -InputFile "C:\temp\image.png" `
 #    -OutputDir "C:\temp\outputdir"
+# Try p_octree / d_bayer2 / r_nearest / q_adaptive,q_weighted,q_perceptual,q_nearest for a good result
+# Try p_median_cut / d_bayer2 / r_bicubic / q_perceptual for a good result
 
 param(
     [Parameter(Mandatory = $true)]
@@ -48,7 +50,13 @@ $dithers = @(
     "bayer2",
     "bayer4",
     "bayer8",
-    "adaptive"
+    "adaptive",
+    "atari_false_floyd",
+    "atari_two_row_sierra",
+    "atari_diagonal",
+    "atari_bayer2v2",
+    "atari_bayer2x4",
+    "atari_non_rectangular8"
 )
 
 $resizes = @(

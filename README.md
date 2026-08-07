@@ -52,9 +52,9 @@ python convert.py input.png output.bin
 ```
 
 ### Specifying Export Formats
-The output format can be automatically inferred from the extension of your output file. You can also explicitly request multiple formats using the `--export` option:
+The output format can be automatically inferred from the extension of your output file. You can also explicitly request formats using the `--export` option (repeat for multiple):
 ```bash
-python convert.py input.png output --export png bin xex asm dta
+python convert.py input.png output --export png --export xex --export asm
 ```
 
 Supported export formats:
@@ -83,6 +83,10 @@ Supported export formats:
 | `--background-index` | Integer (`0-255`) | `0` | Default Atari color index for the background. |
 | `--preview` | Flag | `False` | Generate high-res comparison, upscaled, and error heatmap previews. |
 | `--metrics` | Flag | `False` | Compute and display quality metrics. |
+| `--export` | `png`, `bin`, `asm`, `dta`, `xex` (repeatable) | (inferred) | Export format. Repeat flag for multiple formats. |
+| `--xex`, `-x` | Path | None | Explicit output path for Atari executable preview (.xex). |
+| `--antic-mode`, `-m` | `D`, `E`, `F`, `7`, `15`, `8` | (auto) | ANTIC mode for XEX preview. |
+| `--atari-colors` | Comma-separated hex | None | Override color registers in XEX (e.g. `0x00,0x04,0x0a,0x0e`). |
 | `--config` | Path | None | Path to a JSON configuration file to load settings. |
 | `--save-config` | Path | None | Path to save current pipeline settings as a JSON config file. |
 
@@ -122,7 +126,8 @@ python convert.py input.png output.bin --save-config my_config.json --dither ada
         "png",
         "bin",
         "xex"
-    ]
+    ],
+    "atari_colors": [0, 4, 10, 14]
 }
 ```
 
