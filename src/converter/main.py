@@ -81,7 +81,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--atari-colors",
         type=str,
         default=None,
-        help="Override color registers in XEX output (comma-separated hex, e.g. 0x00,0x04,0x0a,0x0e)",
+        help="Override color registers in XEX/ASM output (comma-separated hex, e.g. 0x00,0x04,0x0a,0x0e)",
+    )
+    parser.add_argument(
+        "--label-name",
+        type=str,
+        default=None,
+        help="Override the ASM label prefix (default: SCREEN_<INPUT_STEM>, e.g. SCREEN_ROBOT)",
     )
     return parser
 
@@ -158,6 +164,11 @@ def main(argv: list[str] | None = None) -> int:
     if not input_path.exists():
         print(f"Error: input file not found: {input_path}", file=sys.stderr)
         return 1
+
+    if args.label_name is not None:
+        config.label_name = args.label_name
+    elif config.label_name is None:
+        config.label_name = f"SCREEN_{input_path.stem.upper()}"
 
     result = run_conversion(input_path, args.output, config)
 

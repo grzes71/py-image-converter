@@ -92,7 +92,11 @@ def export_result(
             exported.append(p)
         elif fmt == ExportFormat.ASM:
             p = parent / f"{stem}.s"
-            export_asm(result.indexed, p)
+            export_asm(
+                result.indexed, p,
+                label=config.label_name or "SCREEN",
+                atari_colors=config.atari_colors,
+            )
             exported.append(p)
         elif fmt == ExportFormat.DTA:
             p = parent / f"{stem}.dta"
