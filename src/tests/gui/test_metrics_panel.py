@@ -11,6 +11,7 @@ import pytest
 
 pytest.importorskip("PySide6", reason="PySide6 is not installed (install the 'gui' extra)")
 
+from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtGui import QGuiApplication  # noqa: E402
 from PySide6.QtWidgets import QFormLayout, QGroupBox, QLabel  # noqa: E402
 
@@ -64,8 +65,11 @@ def _result(
 
 
 def _panel(qtbot) -> MetricsPanel:
+    """A panel that is really on screen: the tests below check where it puts its content."""
     panel = MetricsPanel()
     qtbot.addWidget(panel)
+    panel.show()
+    qtbot.waitExposed(panel)
     return panel
 
 
@@ -87,10 +91,130 @@ def _metric_tooltip(panel: MetricsPanel, label: str) -> str:
 def test_construction(qtbot) -> None:
     panel = _panel(qtbot)
 
-    titles = {group.title() for group in panel.findChildren(QGroupBox)}
-    assert titles == {METRICS_TITLE, TIMINGS_TITLE}
+    assert panel.metrics_section.title == METRICS_TITLE
+    assert panel.timings_section.title == TIMINGS_TITLE
     assert panel.copy_button.text() == "Copy"
     assert panel.timings_hint.text().startswith("0.00 ms means the stage did no work")
+    assert panel.findChildren(QGroupBox) == [], "the sections replace the old group boxes"
+
+
+def test_both_sections_start_collapsed(qtbot) -> None:
+    """The diagnostics are on request: the panel must not take space at start-up."""
+    panel = _panel(qtbot)
+
+    assert panel.metrics_section.is_expanded is False
+    assert panel.timings_section.is_expanded is False
+    assert panel.metrics_section.body.isHidden() is True
+    assert panel.timings_section.body.isHidden() is True
+    assert panel.metrics_section.header.arrowType() == Qt.ArrowType.RightArrow
+    assert panel.timings_section.header.arrowType() == Qt.ArrowType.RightArrow
+    header_height = max(
+        panel.metrics_section.header.sizeHint().height(),
+        panel.timings_section.header.sizeHint().height(),
+    )
+    assert (
+        panel.sizeHint().height() <= 2 * header_height + panel.copy_button.sizeHint().height() + 20
+    )
+
+
+def test_expanding_a_section_shows_its_content(qtbot) -> None:
+    panel = _panel(qtbot)
+    panel.set_result(_result(metrics=_metrics(), timings=FULL_TIMINGS))
+    collapsed = panel.sizeHint().height()
+
+    panel.metrics_section.set_expanded(True)
+
+    assert panel.metrics_section.is_expanded is True
+    assert panel.metrics_form.parentWidget().isVisibleTo(panel) is True
+    assert panel.timings_section.is_expanded is False, "the other section stays as it was"
+    # Qt posts a layout request, so the height hint follows on the next event-loop turn.
+    qtbot.waitUntil(lambda: panel.sizeHint().height() > collapsed, timeout=1000)
+
+    panel.timings_section.set_expanded(True)
+
+    assert panel.timings_form.parentWidget().isVisibleTo(panel) is True
+    assert panel.timings_hint.isVisibleTo(panel) is True
+    qtbot.waitUntil(
+        lambda: panel.sizeHint().height() > collapsed + panel.timings_hint.sizeHint().height(),
+        timeout=1000,
+    )
+
+
+def test_collapsing_again_hides_the_content_and_frees_the_space(qtbot) -> None:
+    panel = _panel(qtbot)
+    panel.set_result(_result(metrics=_metrics(), timings=FULL_TIMINGS))
+    panel.metrics_section.set_expanded(True)
+    panel.timings_section.set_expanded(True)
+    qtbot.waitUntil(lambda: panel.sizeHint().height() > 200, timeout=1000)
+    expanded = panel.sizeHint().height()
+
+    panel.metrics_section.set_expanded(False)
+    panel.timings_section.set_expanded(False)
+
+    assert panel.metrics_section.body.isHidden() is True
+    assert panel.timings_section.body.isHidden() is True
+    assert panel.metrics_form.rowCount() == 7, "hiding the body does not throw the rows away"
+    qtbot.waitUntil(lambda: panel.sizeHint().height() < expanded, timeout=1000)
+    assert panel.sizeHint().height() < expanded / 2, "only the two headers and the button remain"
+
+
+def test_the_sections_toggle_independently(qtbot) -> None:
+    panel = _panel(qtbot)
+
+    panel.timings_section.set_expanded(True)
+
+    assert panel.timings_section.is_expanded is True
+    assert panel.metrics_section.is_expanded is False
+
+    panel.metrics_section.toggle()
+
+    assert panel.metrics_section.is_expanded is True
+    assert panel.timings_section.is_expanded is True
+
+
+def test_the_content_is_updated_while_the_sections_are_collapsed(qtbot) -> None:
+    """Collapsed is a visibility state only: the panel still renders every result it is given."""
+    panel = _panel(qtbot)
+    assert panel.metrics_section.is_expanded is False
+
+    panel.set_result(_result(metrics=_metrics(), timings=FULL_TIMINGS))
+
+    assert panel.metric_values["MSE"] == "12.35"
+    assert panel.timing_values["render"] == "250.00 ms"
+    assert panel.metrics_form.rowCount() == 7
+    assert panel.copy_button.isEnabled() is True
+    assert panel.metrics_section.body.isHidden() is True, "updating never expands the section"
+
+    panel.set_outdated(4)
+
+    assert panel.outdated_generation == 4
+    assert panel.outdated_label.isHidden() is False, "the marker lives outside the collapsed bodies"
+
+
+def test_the_report_and_the_clipboard_work_while_collapsed(qtbot) -> None:
+    panel = _panel(qtbot)
+    panel.set_result(_result(metrics=_metrics(), timings=FULL_TIMINGS))
+    QGuiApplication.clipboard().setText("untouched")
+    assert panel.metrics_section.is_expanded is False
+    assert panel.timings_section.is_expanded is False
+
+    panel.copy_metrics()
+
+    text = QGuiApplication.clipboard().text()
+    assert text == panel.report_text()
+    assert "MSE: 12.35" in text, "the metrics part is still copied"
+    assert f"{TIMINGS_TITLE}\n" in text, "the timings part is still copied"
+
+
+def test_a_header_click_expands_the_section_in_the_panel(qtbot) -> None:
+    panel = _panel(qtbot)
+    panel.show()
+    qtbot.waitExposed(panel)
+
+    qtbot.mouseClick(panel.metrics_section.header, Qt.MouseButton.LeftButton)
+
+    assert panel.metrics_section.is_expanded is True
+    assert panel.metrics_form.parentWidget().isVisibleTo(panel) is True
 
 
 def test_the_initial_state_is_empty(qtbot) -> None:

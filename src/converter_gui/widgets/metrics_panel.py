@@ -5,6 +5,10 @@ the per-stage timings. It computes nothing and interprets nothing - it keeps the
 renders what is in it, so a zero timing keeps its "no work performed" meaning and an infinite PSNR stays
 infinite.
 
+Both parts live in a :class:`CollapsibleSection` that starts collapsed, so the diagnostics are available
+on request instead of competing with the preview for space; the values are rendered either way, the
+sections only decide whether they are on screen.
+
 Values are formatted by :func:`converter.metrics.format_metrics` itself: the displayed rows are the
 lines of that report, which keeps the panel and the CLI telling exactly the same story. The copy action
 reuses the same text and appends the stage timings, which ``format_metrics`` does not know about.
@@ -18,7 +22,6 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QFormLayout,
-    QGroupBox,
     QLabel,
     QPushButton,
     QVBoxLayout,
@@ -27,6 +30,7 @@ from PySide6.QtWidgets import (
 
 from converter.metrics import format_metrics
 from converter.types import ConversionResult, MetricResult
+from converter_gui.widgets.collapsible_section import CollapsibleSection
 
 METRICS_TITLE = "Metrics"
 TIMINGS_TITLE = "Stage timings"
@@ -179,18 +183,20 @@ class MetricsPanel(QWidget):
         self.outdated_label.hide()
         layout.addWidget(self.outdated_label)
 
-        metrics_group = QGroupBox(METRICS_TITLE, self)
-        self.metrics_form = QFormLayout(metrics_group)
-        layout.addWidget(metrics_group)
+        # Both sections start collapsed: the diagnostics are there on request and do not compete with the
+        # preview for space. Their content is a body of their own, so hiding it frees the space it took.
+        self.metrics_section = CollapsibleSection(METRICS_TITLE, self)
+        self.metrics_form = QFormLayout()
+        self.metrics_section.body_layout.addLayout(self.metrics_form)
+        layout.addWidget(self.metrics_section)
 
-        timings_group = QGroupBox(TIMINGS_TITLE, self)
-        timings_layout = QVBoxLayout(timings_group)
+        self.timings_section = CollapsibleSection(TIMINGS_TITLE, self)
         self.timings_form = QFormLayout()
-        timings_layout.addLayout(self.timings_form)
-        self.timings_hint = QLabel(TIMINGS_HINT, timings_group)
+        self.timings_section.body_layout.addLayout(self.timings_form)
+        self.timings_hint = QLabel(TIMINGS_HINT, self.timings_section.body)
         self.timings_hint.setWordWrap(True)
-        timings_layout.addWidget(self.timings_hint)
-        layout.addWidget(timings_group)
+        self.timings_section.body_layout.addWidget(self.timings_hint)
+        layout.addWidget(self.timings_section)
 
         self.copy_button = QPushButton("Copy", self)
         self.copy_button.setToolTip("Copy the metrics and the stage timings to the clipboard")

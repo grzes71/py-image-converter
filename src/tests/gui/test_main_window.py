@@ -171,6 +171,76 @@ def test_the_menus_and_the_toolbar_expose_the_actions(qtbot) -> None:
     assert window.fit_action.isEnabled() is False
 
 
+def test_the_diagnostics_start_collapsed_in_the_window(qtbot) -> None:
+    """At start-up the metrics and the timings are there, collapsed, and the preview keeps the room."""
+    window, _, _ = build_window(qtbot)
+    window.show()
+    qtbot.waitExposed(window)
+    panel = window.metrics_panel
+
+    assert panel.metrics_section.is_expanded is False
+    assert panel.timings_section.is_expanded is False
+    assert panel.metrics_section.body.isHidden() is True
+    assert panel.timings_section.body.isHidden() is True
+
+    # The column is fitted to the collapsed panel: two headers plus the Copy button, nothing more.
+    qtbot.waitUntil(lambda: panel.height() == panel.sizeHint().height(), timeout=2000)
+    header_height = panel.metrics_section.header.sizeHint().height()
+    assert panel.height() < 4 * header_height
+
+
+def test_expanding_a_section_gives_the_diagnostics_more_room(qtbot) -> None:
+    window, _, _ = build_window(qtbot)
+    window.show()
+    qtbot.waitExposed(window)
+    panel = window.metrics_panel
+    qtbot.waitUntil(lambda: panel.height() == panel.sizeHint().height(), timeout=2000)
+    collapsed_height = panel.height()
+    parameters_before = window.side_splitter.sizes()[0]
+
+    panel.metrics_section.set_expanded(True)
+
+    qtbot.waitUntil(lambda: panel.height() > collapsed_height, timeout=2000)
+    assert panel.height() == panel.sizeHint().height(), "the column grows to the content it needs"
+    assert window.side_splitter.sizes()[0] < parameters_before, "the parameters hand the room over"
+
+    panel.metrics_section.set_expanded(False)
+
+    qtbot.waitUntil(lambda: panel.height() == collapsed_height, timeout=2000)
+    assert window.side_splitter.sizes()[0] > parameters_before - collapsed_height
+
+
+def test_the_sections_work_independently_in_the_window(qtbot) -> None:
+    window, _, _ = build_window(qtbot)
+    window.show()
+    qtbot.waitExposed(window)
+    panel = window.metrics_panel
+    qtbot.waitUntil(lambda: panel.height() == panel.sizeHint().height(), timeout=2000)
+    collapsed_height = panel.height()
+
+    panel.timings_section.set_expanded(True)
+
+    qtbot.waitUntil(lambda: panel.height() > collapsed_height, timeout=2000)
+    assert panel.timings_section.is_expanded is True
+    assert panel.metrics_section.is_expanded is False
+    assert panel.metrics_section.body.isHidden() is True
+
+
+def test_a_conversion_updates_the_metrics_while_the_sections_stay_collapsed(qtbot) -> None:
+    window, backend, _ = open_window(qtbot)
+    assert window.metrics_panel.metrics_section.is_expanded is False
+
+    backend.finish()
+
+    metrics = window.metrics_panel
+    assert metrics.metric_values["MSE"] == "12.50"
+    assert "render" in metrics.timing_values
+    assert metrics.copy_button.isEnabled() is True
+    assert metrics.metrics_section.is_expanded is False, "an update never opens the section"
+    assert metrics.timings_section.is_expanded is False
+    assert window.metrics_panel.metrics_form.rowCount() == 7
+
+
 def test_the_previews_are_labelled(qtbot) -> None:
     window, _, _ = build_window(qtbot)
 

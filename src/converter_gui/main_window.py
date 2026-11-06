@@ -12,8 +12,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QAction, QCloseEvent, QDragEnterEvent, QDropEvent, QKeySequence
+from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import (
+    QAction,
+    QCloseEvent,
+    QDragEnterEvent,
+    QDropEvent,
+    QKeySequence,
+    QShowEvent,
+)
 from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
@@ -52,6 +59,9 @@ SOURCE_CAPTION = "Source (resized)"
 RESULT_CAPTION = "Atari result"
 NO_SOURCE_TEXT = "No image loaded - use File > Open or drop an image here"
 SHUTDOWN_TIMEOUT_MS = DEFAULT_SHUTDOWN_TIMEOUT_MS
+
+METRICS_PANEL_HEIGHT = 150
+"""Initial height of the diagnostics column: both sections collapsed plus the Copy button."""
 
 BADGE_OBJECT_NAME = "stateBadge"
 BADGE_STYLES = {
@@ -291,8 +301,14 @@ class MainWindow(QMainWindow):
         side_splitter = QSplitter(Qt.Orientation.Vertical, self)
         side_splitter.addWidget(parameters_scroll)
         side_splitter.addWidget(self.metrics_panel)
-        side_splitter.setStretchFactor(0, 3)
-        side_splitter.setStretchFactor(1, 2)
+        # The parameters take every spare pixel; the diagnostics get exactly the height their collapsed
+        # sections need and grow only when a section is expanded (`_fit_side_splitter`).
+        side_splitter.setStretchFactor(0, 1)
+        side_splitter.setStretchFactor(1, 0)
+        side_splitter.setSizes([560, METRICS_PANEL_HEIGHT])
+        self.side_splitter = side_splitter
+        self.metrics_panel.metrics_section.toggled.connect(self._schedule_side_splitter_fit)
+        self.metrics_panel.timings_section.toggled.connect(self._schedule_side_splitter_fit)
 
         splitter = QSplitter(Qt.Orientation.Horizontal, self)
         splitter.addWidget(preview_column)
@@ -301,6 +317,26 @@ class MainWindow(QMainWindow):
         splitter.setStretchFactor(1, 1)
         splitter.setSizes([700, 380])
         self.setCentralWidget(splitter)
+
+    def _schedule_side_splitter_fit(self, *_state: object) -> None:
+        """Re-fit the diagnostics column once Qt has recomputed the layout of the sections."""
+        QTimer.singleShot(0, self._fit_side_splitter)
+
+    def _fit_side_splitter(self, *_state: object) -> None:
+        """Give the diagnostics the height its sections need and hand the rest to the parameters."""
+        splitter = self.side_splitter
+        panel = self.metrics_panel
+        wanted = max(panel.sizeHint().height(), panel.minimumSizeHint().height())
+        available = splitter.height()
+        if available <= 0:
+            return  # not laid out yet: the sizes set in _build_layout still apply
+        first = max(available - wanted - splitter.handleWidth(), 0)
+        splitter.setSizes([first, wanted])
+
+    def showEvent(self, event: QShowEvent) -> None:
+        """Fit the diagnostics column once the window has a real geometry."""
+        super().showEvent(event)
+        self._schedule_side_splitter_fit()
 
     def _build_error_banner(self) -> QWidget:
         """A non-modal, dismissible line above the preview (plan §7.6)."""
