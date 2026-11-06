@@ -16,7 +16,8 @@
 > |---|---|---|
 > | 1 | 2026-08-07 | Analysis, defect report B1–B7, architecture proposal, tasks T0.1–T5.4, questions Q1–Q14 |
 > | 2 | 2026-11-06 | Q1–Q14 answered by the user (see §16), extra requirements integrated (cache integrity, responsiveness measurement, stale-result rules), tasks added (T0.3, T1.6, T1.7, T2.7, T3.5, Phase 6), §17 checklist and §18 commit plan added |
-> | 3 | 2026-11-06 | Phase 0 progress: T0.1 (`0b073cf`) and T0.2 (`cb47a36`) completed, B1–B4 fixed and verified, 59 tests green; T0.3 in progress. See §20 for the evidence |
+> | 3 | 2026-11-06 | Phase 0 progress: T0.1 (`0b073cf`) and T0.2 (`cb47a36`) completed, B1–B4 fixed and verified, 59 tests green; T0.3 started. See §20 for the evidence |
+> | 4 | 2026-11-06 | **Phase 0 complete** — T0.1 (`0b073cf`), T0.2 (`cb47a36`) and T0.3 (`f345c4a`) done and accepted. Phase 1 (T1.1) **not started**; it needs a separate go-ahead |
 
 ---
 
@@ -1246,7 +1247,7 @@ before its dependencies are merged. Full acceptance detail is in §13; this is t
 
 Legend: **[R]** reuse, **[F]** refactor, **[N]** new. "golden" = `test_cli_golden.py` passes.
 
-### Phase 0 — safety net (blocking)
+### Phase 0 — safety net (blocking) — ✅ complete (T0.1–T0.3)
 
 | ☐ | Task | Depends on | Acceptance (short) |
 |---|---|---|---|
@@ -1421,4 +1422,7 @@ Full report, evidence classification (measured / hardware documentation / open d
 T6.1 option list: **[`docs/XEX_COLOR_REGISTERS.md`](XEX_COLOR_REGISTERS.md)**. Raw artefacts
 (screenshots, register dumps, VBI disassembly, probes) live in `docs/evidence/xex-color-registers/`.
 No source, test or golden file was changed by T0.3.
+
+**Phase 0 is complete** (T0.1–T0.3 accepted); **Phase 1 (T1.1) has not been started** and requires a
+separate go-ahead.
 
