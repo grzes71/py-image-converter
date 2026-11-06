@@ -1,0 +1,114 @@
+{
+  "vbi_bytes_e80e": "58bdc002454f254e9d12d0ca10f2",
+  "vbi_disasm": [
+    "        cli",
+    "        lda PCOLR0,X [$02E0] = $00",
+    "        eor COLRSH   [$4F] = $00",
+    "        and DRKMSK   [$4E] = $FE",
+    "        sta COLPM0,X [$D032]",
+    "        dex",
+    "        bpl $E80E"
+  ],
+  "colrsh_4f": 0,
+  "drkmsk_4e": 254,
+  "shadows_02c0_02c8": "0000000000ecb2ab00",
+  "antic": {
+    "ok": true,
+    "DMACTL": "$22",
+    "CHACTL": "$02",
+    "DLISTL": "$00",
+    "DLISTH": "$3e",
+    "HSCROL": "$00",
+    "VSCROL": "$00",
+    "PMBASE": "$00",
+    "CHBASE": "$e0",
+    "NMIEN": "$40",
+    "DLIST": "$3e00",
+    "beam_x": 0,
+    "beam_y": 248
+  },
+  "dlist_head": [
+    {
+      "addr": "$3e00",
+      "ctl": "$70",
+      "mode": 0,
+      "dli": false,
+      "kind": "blank",
+      "blank_lines": 8
+    },
+    {
+      "addr": "$3e01",
+      "ctl": "$70",
+      "mode": 0,
+      "dli": false,
+      "kind": "blank",
+      "blank_lines": 8
+    },
+    {
+      "addr": "$3e02",
+      "ctl": "$70",
+      "mode": 0,
+      "dli": false,
+      "kind": "blank",
+      "blank_lines": 8
+    },
+    {
+      "addr": "$3e03",
+      "ctl": "$4e",
+      "mode": 14,
+      "dli": false,
+      "kind": "graphics",
+      "lms": true,
+      "hscrol": false,
+      "vscrol": false,
+      "pf": "$4000",
+      "dmactl": "$22",
+      "chbase": 112
+    },
+    {
+      "addr": "$3e06",
+      "ctl": "$0e",
+      "mode": 14,
+      "dli": false,
+      "kind": "graphics",
+      "lms": false,
+      "hscrol": false,
+      "vscrol": false,
+      "pf": "$4028",
+      "dmactl": "$22",
+      "chbase": 112
+    }
+  ],
+  "hwpoke_immediate": {
+    "before": "$ec",
+    "after": "$1e",
+    "restored": "$ec"
+  },
+  "watch_d01a_hit": {
+    "bps": [
+      {
+        "id": 0,
+        "addr": "$d01a",
+        "length": 1,
+        "pc": false,
+        "read": false,
+        "write": true,
+        "oneshot": false,
+        "continue_on_hit": false,
+        "conditional": false
+      }
+    ],
+    "regs": {
+      "ok": true,
+      "PC": "$e819",
+      "A": "$00",
+      "X": "$08",
+      "Y": "$00",
+      "S": "$f3",
+      "P": "$73",
+      "flags": "-V-B--ZC",
+      "cycles": 12229532,
+      "mode": "6502"
+    }
+  }
+}

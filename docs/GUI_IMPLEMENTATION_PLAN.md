@@ -897,11 +897,11 @@ Legend used below: **[R]** reuse existing, **[F]** refactor existing, **[N]** ne
   `baselines.json` floyd metrics 6541.08/9.97/0.2095 → 1912.51/15.31/0.5921; suite 50 → 59 passed.
   Details in §20.
 
-**T0.3 [N] B5 investigation: XEX colour-register order (Q2 — investigation only)**
+**T0.3 [N] B5 investigation: XEX colour-register order (Q2 — investigation only) — ✅ DONE (diagnostics)**
 - Do: determine empirically which GTIA register each pixel value must load for ANTIC D/E/F and
   which order `--atari-colors` is meant to use. Method: assemble the current XEX output, run it in
-  an Atari emulator (Altirra, plus Atari800 as a second opinion), dump `$02C4`–`$02C8` (`COLBK`,
-  `COLPF0`–`COLPF3`) after the init code and compare screenshots with the intended palette.
+  the Atari emulator (Altirra is the only permitted emulator for this task), dump `$02C4`–`$02C8`
+  (`COLBK`, `COLPF0`–`COLPF3`) after the init code and compare screenshots with the intended palette.
 - Files: **documentation only** — `docs/XEX_COLOR_REGISTERS.md` (evidence, register map, proposed
   byte-level change, affected tests).
 - Depends: – (parallel to T0.1)
@@ -910,6 +910,12 @@ Legend used below: **[R]** reuse existing, **[F]** refactor existing, **[N]** ne
 - Acceptance: the document shows the register dump + screenshots for ANTIC E and ANTIC F and states
   either "no defect" or an exact proposed patch. **No source change in T0.3.**
 - Follow-up: T6.1 implements the fix only if the evidence confirms the defect.
+- **Result (done, `docs/XEX_COLOR_REGISTERS.md`):** B5 **confirmed** for ANTIC D/E (all playfield
+  colours shifted by one register; 3 visible colours instead of 4). **ANTIC F is a separate case:**
+  it renders one hue with two luminances (`COLPF2` = hue + background luminance, `COLPF1` = foreground
+  luminance), so two arbitrary palette colours cannot be shown and the current export is fully black;
+  the D/E register assignment must not be applied to F. Side finding: `DRKMSK=$FE` clears colour bit 0.
+  Artefacts: `docs/evidence/xex-color-registers/`. No source change.
 
 ### Phase 1 – Conversion engine API
 
@@ -1246,7 +1252,7 @@ Legend: **[R]** reuse, **[F]** refactor, **[N]** new. "golden" = `test_cli_golde
 |---|---|---|---|
 | ☑ | **T0.1** CLI golden tests [N] — done `0b073cf` | – | Existing 30 tests + new golden test green on **unmodified** code; matrix covers all formats, 5 dithers, 2 palettes, `--atari-colors`, `--label-name`, `-x -m D/E`, `--config`, `--save-config`, `--preview`, `--metrics` |
 | ☑ | **T0.2** Fix B1–B4 [F] — done `cb47a36` | T0.1 | Real palette used in `dither=none`, metrics and previews; `adaptive` ≠ `nearest`; goldens/baselines regenerated intentionally; diff limited to `dither=none` + metrics/previews; **no refactoring in this commit** |
-| ☐ | **T0.3** B5 emulator investigation [N] | – (Q15) | `docs/XEX_COLOR_REGISTERS.md` with register dump + screenshots; verdict "no defect" or exact patch; **no source change** |
+| ☑ | **T0.3** B5 emulator investigation [N] — done (diagnostics only) | – | [`docs/XEX_COLOR_REGISTERS.md`](XEX_COLOR_REGISTERS.md): register dumps + screenshots for D/E/F, verdict **B5 confirmed**; D/E fix proposed, **F needs a separate design decision** (T6.1); evidence in `docs/evidence/xex-color-registers/`; **no source change** |
 
 ### Phase 1 — engine (blocking for the GUI)
 
@@ -1395,9 +1401,24 @@ pre-existing findings (identical `file:line` set verified against a pristine `HE
 test modules added in Phase 0 are `ruff check`/`ruff format` clean, `pipeline.py` keeps its
 pre-existing formatting state.
 
-### 20.2 Phase 0 — in progress
+### 20.2 Phase 0 — T0.3 (B5 diagnostics)
 
-| Task | Status |
-|---|---|
-| **T0.3** B5 XEX colour-register verification | in progress — evidence collected with the `altirra-bridge` skill, results in `docs/XEX_COLOR_REGISTERS.md` |
+**T0.3 — ✅ diagnostics complete; the fix is NOT implemented (that is T6.1).**
+
+B5 is confirmed with emulator evidence (Altirra driven through the `altirra-bridge` skill):
+
+- **ANTIC D/E**: the XEX init writes `palette[0..3]` to `COLOR0..COLOR3`, which the OS VBI maps to
+  `COLPF0..COLPF3`, while the background receives the hard-coded `$00` padding through `COLOR4`.
+  Because modes D/E read `COLBK, COLPF0, COLPF1, COLPF2`, every colour is shifted by one playfield
+  register: three visible colours instead of four, and `palette[3]` lands in the unused `COLPF3`.
+- **ANTIC F**: a separate, partly design-level problem. Mode F renders one hue with two luminances
+  (`COLPF2` = hue + background luminance, `COLPF1` = foreground luminance), so two arbitrary palette
+  colours cannot be displayed at all; the current export produces a completely black screen. The D/E
+  register fix is **not** valid for F.
+- Side finding: the OS VBI applies `and DRKMSK ($FE)`, which clears bit 0 of every colour value.
+
+Full report, evidence classification (measured / hardware documentation / open decision) and the
+T6.1 option list: **[`docs/XEX_COLOR_REGISTERS.md`](XEX_COLOR_REGISTERS.md)**. Raw artefacts
+(screenshots, register dumps, VBI disassembly, probes) live in `docs/evidence/xex-color-registers/`.
+No source, test or golden file was changed by T0.3.
 

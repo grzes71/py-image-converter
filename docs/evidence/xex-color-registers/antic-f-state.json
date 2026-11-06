@@ -1,0 +1,46 @@
+{
+  "label": "antic-f",
+  "regs": {
+    "ok": true,
+    "PC": "$3824",
+    "A": "$00",
+    "X": "$20",
+    "Y": "$03",
+    "S": "$f9",
+    "P": "$33",
+    "flags": "---B--ZC",
+    "cycles": 21159474,
+    "mode": "6502"
+  },
+  "shadows_02c0_02c8": "000000000001000000",
+  "drkmsk": 254,
+  "colrsh": 0,
+  "gtia_colours": {
+    "COLPM0": "$00",
+    "COLPM1": "$00",
+    "COLPM2": "$00",
+    "COLPM3": "$00",
+    "COLPF0": "$00",
+    "COLPF1": "$00",
+    "COLPF2": "$00",
+    "COLPF3": "$00",
+    "COLBK": "$00"
+  },
+  "antic": {
+    "ok": true,
+    "DMACTL": "$22",
+    "CHACTL": "$02",
+    "DLISTL": "$00",
+    "DLISTH": "$3e",
+    "HSCROL": "$00",
+    "VSCROL": "$00",
+    "PMBASE": "$00",
+    "CHBASE": "$e0",
+    "NMIEN": "$40",
+    "DLIST": "$3e00",
+    "beam_x": 0,
+    "beam_y": 248
+  },
+  "dlist_entries": 196,
+  "init_bytes": "a9228d2902a9008d3002a93e8d3102a9008dc402a9018dc502a9008dc602a9008dc702a9008dc8024c0038"
+}
