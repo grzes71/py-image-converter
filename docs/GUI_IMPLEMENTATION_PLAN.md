@@ -1335,17 +1335,20 @@ Commits are ordered, and each one must leave the suite green. Prefixes follow th
 | 1 | `test: add CLI golden-output regression tests` | T0.1 (test + fixture only) | any source change |
 | 2 | `fix: use the selected palette for quantize, metrics and previews` | T0.2 (B1–B4) + intentionally regenerated goldens/baselines | refactoring, renames, engine code |
 | 3 | `docs: document XEX colour-register verification` | T0.3 | source changes |
-| 4 | `refactor: split convert_image into pipeline stages` | T1.1 (+ T1.7 audit test) | behaviour changes |
-| 5 | `feat: add timings, validate_config and converted_rgb` | T1.2 | engine |
-| 6 | `feat: add ConversionEngine with staged cache and cancellation` | T1.3 | bug fixes |
-| 7 | `feat: fingerprint the source and freeze cached arrays` | T1.6 (integrity tests) | anything from commit 2 |
-| 8 | `feat: add export compatibility helper and antic_mode passthrough` | T1.4 | GUI |
-| 9 | `feat: export the engine and config from converter` | T1.5 | GUI |
-| 10+ | `feat: …` per GUI task | T2.x, T3.x, T4.x | core behaviour changes |
+| 4 | `refactor: split convert_image into pipeline stages` | T1.1 **only** (stage functions + `test_pipeline_stages.py`) | behaviour changes, the T1.7 audit test, engine code |
+| 5 | `test: add colour-count capability audit` | T1.7 (`test_colour_counts.py` + §3.4 findings) | source changes |
+| 6 | `feat: add timings, validate_config and converted_rgb` | T1.2 | engine |
+| 7 | `feat: add ConversionEngine with staged cache and cancellation` | T1.3 | bug fixes |
+| 8 | `feat: fingerprint the source and freeze cached arrays` | T1.6 (integrity tests) | anything from commit 2 |
+| 9 | `feat: add export compatibility helper and antic_mode passthrough` | T1.4 | GUI |
+| 10 | `feat: export the engine and config from converter` | T1.5 | GUI |
+| 11+ | `feat: …` per GUI task | T2.x, T3.x, T4.x | core behaviour changes |
 | last | `chore: add PyInstaller packaging` / `docs: add GUI guide` | Phase 5 | — |
 
 Rule of thumb: **bug fixes (commit 2) never share a commit with refactoring (commit 4+)**; a review
-of commit 2 must be possible without reading any engine code.
+of commit 2 must be possible without reading any engine code. Every task in §13 gets its own commit:
+**T1.1 (refactor) and T1.7 (capability audit) are deliberately separate** — the audit test must not
+ride along with the stage split.
 
 ---
 
