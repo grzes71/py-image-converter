@@ -153,14 +153,95 @@ def test_zoom_emits_one_signal_per_change(qtbot) -> None:
     assert received == [4.0]
 
 
-def test_setting_a_new_image_resets_the_zoom(qtbot) -> None:
+# --- the view state survives an image update ---------------------------
+
+
+def test_a_new_image_keeps_the_zoom(qtbot) -> None:
+    """A conversion replaces the pixels of the image on screen; it must not move the view."""
     preview = _preview(qtbot)
     preview.set_image(_qimage(40, 30))
-    preview.set_zoom(8.0)
+    preview.set_zoom(2.0)
 
-    preview.set_image(_qimage(40, 30))
+    preview.set_image(_qimage(40, 30, (200, 100, 50)))
+
+    assert preview.zoom == pytest.approx(2.0)
+    assert preview.is_fit is False
+    assert preview.views[0].transform().m11() == pytest.approx(2.0)
+
+
+@pytest.mark.parametrize("level", (2.0, 4.0, 8.0))
+def test_the_zoom_survives_a_pair_update(qtbot, level: float) -> None:
+    preview = _preview(qtbot)
+    preview.set_image_pair(_qimage(40, 30), _qimage(40, 30))
+    preview.set_zoom(level)
+
+    preview.set_image_pair(_qimage(40, 30, (1, 2, 3)), _qimage(40, 30, (4, 5, 6)))
+
+    assert preview.zoom == pytest.approx(level)
+    for view in preview.views:
+        assert view.transform().m11() == pytest.approx(level), "both views keep the zoom"
+
+
+def test_the_zoom_survives_several_updates(qtbot) -> None:
+    preview = _preview(qtbot)
+    preview.set_image_pair(_qimage(40, 30), _qimage(40, 30))
+    preview.set_zoom(2.0)
+
+    for step in range(3):
+        preview.set_image_pair(_qimage(40, 30, (step, step, step)), _qimage(40, 30, (step,) * 3))
+
+    assert preview.zoom == pytest.approx(2.0)
+    assert [view.transform().m11() for view in preview.views] == pytest.approx([2.0, 2.0])
+    assert not preview.views[0].pixmap_item.pixmap().isNull(), "the newest pixels are shown"
+    assert preview.views[0].pixmap_item.pixmap().toImage().pixelColor(0, 0).red() == 2
+
+
+def test_the_scroll_position_survives_an_update(qtbot) -> None:
+    preview = _preview(qtbot)
+    preview.set_image_pair(_qimage(200, 150), _qimage(200, 150))
+    preview.set_zoom(4.0)
+    view = preview.views[0]
+    horizontal = view.horizontalScrollBar()
+    vertical = view.verticalScrollBar()
+    horizontal.setValue(horizontal.maximum())
+    vertical.setValue(vertical.maximum())
+    QApplication.processEvents()
+    before = (horizontal.value(), vertical.value())
+    assert before != (0, 0), "the view is really scrolled to the bottom-right corner"
+
+    preview.set_image_pair(_qimage(200, 150), _qimage(200, 150))
+
+    assert (horizontal.value(), vertical.value()) == before
+    other = preview.views[1]
+    assert (other.horizontalScrollBar().value(), other.verticalScrollBar().value()) == before
+
+
+def test_fit_keeps_fitting_when_the_image_changes_size(qtbot) -> None:
+    preview = _preview(qtbot)
+    preview.set_image_pair(_qimage(40, 30), _qimage(40, 30))
+    preview.fit()
+    first = preview.zoom
+
+    preview.set_image_pair(_qimage(20, 15), _qimage(20, 15))
+
+    assert preview.is_fit is True, "Fit stays the chosen mode"
+    assert preview.zoom == pytest.approx(first * 2, rel=0.05), "the smaller image is fitted larger"
+    assert preview.views[0].transform().m11() == pytest.approx(preview.zoom)
+
+
+def test_clear_still_resets_the_zoom(qtbot) -> None:
+    """An empty preview is a fresh start: no image, no zoom, no Fit."""
+    preview = _preview(qtbot)
+    preview.set_image_pair(_qimage(40, 30), _qimage(40, 30))
+    preview.fit()
+    preview.set_zoom(4.0)
+
+    preview.clear()
 
     assert preview.zoom == 1.0
+    assert preview.is_fit is False
+    assert len(preview.views) == 1
+    assert preview.views[0].pixmap_item.pixmap().isNull()
 
 
 def test_ctrl_wheel_walks_through_the_zoom_levels(qtbot) -> None:

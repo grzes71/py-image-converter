@@ -552,6 +552,58 @@ def test_the_badge_and_the_status_follow_the_controller(qtbot) -> None:
     assert window.state_badge.text() == "ready (gen 2)"
 
 
+def test_zoom_actions_do_not_change_when_the_result_is_replaced(qtbot) -> None:
+    """A new conversion replaces the pixels; the zoom the user chose must survive it."""
+    window, backend, _ = converted_window(qtbot)
+    window.zoom_actions[2.0].trigger()
+    assert window.preview.zoom == pytest.approx(2.0)
+
+    window.parameter_panel.colors_spin.setValue(2)  # auto-update is on: a conversion follows
+    qtbot.waitUntil(lambda: window.is_updating is True, timeout=2000)
+    backend.finish(make_result(width=20, height=16))
+
+    assert window.displayed is not None and window.displayed.generation == 2
+    assert window.preview.zoom == pytest.approx(2.0), "auto-update must not reset the zoom"
+    assert window.preview.is_fit is False
+    assert [view.transform().m11() for view in window.preview.views] == pytest.approx([2.0, 2.0])
+
+
+def test_a_manual_conversion_keeps_the_zoom(qtbot) -> None:
+    window, backend, _ = converted_window(qtbot)
+    window.auto_update_action.setChecked(False)
+    window.zoom_actions[4.0].trigger()
+    window.parameter_panel.colors_spin.setValue(2)
+
+    window.convert_action.trigger()
+    assert window.is_updating is True
+    backend.finish()
+
+    assert window.preview.zoom == pytest.approx(4.0), "Convert must not reset the zoom either"
+    assert [view.transform().m11() for view in window.preview.views] == pytest.approx([4.0, 4.0])
+
+
+def test_opening_another_image_fits_the_preview(qtbot, tmp_path: Path) -> None:
+    """Fit belongs to a new image (or to the Fit action), not to every conversion."""
+    window, backend, _ = converted_window(qtbot)
+    window.show()
+    qtbot.waitExposed(window)
+    window.zoom_actions[4.0].trigger()
+    assert window.preview.is_fit is False
+    assert window.preview.zoom == pytest.approx(4.0)
+
+    assert window.open_image(tmp_path / "second.png") is True
+
+    assert window.preview.is_fit is True, "opening an image fits it"
+    backend.finish(make_result(width=20, height=16))
+
+    assert window.preview.is_fit is True, "the new result keeps the Fit mode"
+    assert window.preview.zoom > 1.0
+    assert window.preview.zoom != pytest.approx(4.0), "the old zoom is not applied to the new image"
+    assert [view.transform().m11() for view in window.preview.views] == pytest.approx(
+        [window.preview.zoom, window.preview.zoom]
+    )
+
+
 def test_the_zoom_actions_are_enabled_by_a_result(qtbot) -> None:
     window, backend, _ = open_window(qtbot)
     assert all(action.isEnabled() is False for action in window.zoom_actions.values())

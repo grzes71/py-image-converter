@@ -462,6 +462,9 @@ class MainWindow(QMainWindow):
         if self._pending_source_path is not None:
             self._source_path = self._pending_source_path
             self._pending_source_path = None
+        # A different image is a different thing to look at: fit it once. Later conversions of the same
+        # source keep whatever view state the user chose (`ImagePreview.set_image_pair` preserves it).
+        self.preview.fit()
         self._refresh_state()
 
     def _on_source_failed(self, generation: int, message: str) -> None:

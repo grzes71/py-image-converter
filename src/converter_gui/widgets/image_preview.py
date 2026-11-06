@@ -5,6 +5,11 @@ factor and a single scroll position: the preview owns that state, the views only
 so a change made in one view is applied to the other exactly once (a re-entrancy guard stops the
 resulting scroll/transform events from bouncing back).
 
+Replacing the images keeps that state: a new conversion produces new pixels for the image the user is
+already looking at, so ``set_image``/``set_image_pair`` keep the zoom and the scroll position (and Fit
+stays Fit, following the new size). The view state changes only when the caller asks for it -
+``set_zoom``, ``fit``, or ``clear`` back to an empty preview at 1x.
+
 Scaling is done with the view transform, never by resampling the pixmap: the ``QGraphicsPixmapItem``
 uses ``Qt.FastTransformation`` and the smoothing render hint is switched off, so at 8x one image pixel
 is drawn as a crisp 8x8 block (plan §6.1).
@@ -149,14 +154,19 @@ class ImagePreview(QWidget):
         return self._fit_mode
 
     def set_image(self, image: QImage | QPixmap) -> None:
-        """Show a single image in one view and reset to 1x."""
+        """Show a single image in one view, keeping the current zoom and scroll position."""
         pixmap = _as_pixmap(image)
         self._show_single()
         self._primary.set_pixmap(pixmap)
-        self._reset_zoom()
+        self._restore_view()
 
     def set_image_pair(self, primary: QImage | QPixmap, secondary: QImage | QPixmap) -> None:
-        """Show two images side by side and reset to 1x; the sizes may differ."""
+        """Show two images side by side (the sizes may differ), keeping the current view state.
+
+        A conversion produces new pixels for the image the user is already looking at, so replacing them
+        must not move the view: the zoom factor and the scroll position are kept, and Fit stays Fit (it
+        simply follows the size of the new image).
+        """
         primary_pixmap = _as_pixmap(primary)
         secondary_pixmap = _as_pixmap(secondary)
         self._show_pair()
@@ -164,14 +174,15 @@ class ImagePreview(QWidget):
         secondary_view = self._secondary
         assert secondary_view is not None
         secondary_view.set_pixmap(secondary_pixmap)
-        self._reset_zoom()
+        self._restore_view()
 
     def clear(self) -> None:
         """Remove every image and go back to a single empty view at 1x."""
         for view in self._views:
             view.clear_pixmap()
         self._show_single()
-        self._reset_zoom()
+        self._fit_mode = False
+        self._apply_zoom(1.0)
 
     def set_zoom(self, factor: float) -> None:
         """Apply an explicit zoom factor to all views (1x, 2x, 4x, 8x, ...)."""
@@ -211,9 +222,9 @@ class ImagePreview(QWidget):
 
     # --- zoom and pan ---------------------------------------------------
 
-    def _reset_zoom(self) -> None:
-        self._fit_mode = False
-        self._apply_zoom(1.0)
+    def _restore_view(self) -> None:
+        """Put the view state back on new pixels: Fit follows the image, a chosen zoom simply stays."""
+        self._apply_zoom(self._fit_zoom() if self._fit_mode else self._zoom)
 
     def _apply_zoom(self, factor: float, source: _PreviewView | None = None) -> None:
         factor = max(float(factor), _MIN_ZOOM)
