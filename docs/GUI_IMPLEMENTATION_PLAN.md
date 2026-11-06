@@ -207,12 +207,58 @@ B1–B4 directly affect what a GUI would display (preview, metrics, heatmap).
 | `export_bin(indexed, path)` | `pack_antic_e` raw 7680 B | **160×190 or 160×192, values 0-3** |
 | `export_asm(indexed, path, label, load_address=0x6000, atari_colors)` | ca65 `.byte` | same as BIN; `_COLORS` table only if `atari_colors` |
 | `export_dta(indexed, path, load_address=0x6000)` | `.byte` listing | same as BIN |
-| `export_xex(indexed, path, palette_indices, antic_mode, atari_colors)` | runnable viewer | D (2bpp, any matching size; inferred for 160×96), E (2bpp), F (1bpp, values 0-1, width 320) |
+| `export_xex(indexed, path, palette_indices, antic_mode, atari_colors)` | runnable viewer | D (2bpp, `width % 4 == 0`; inferred for 160×96), E (2bpp, `width % 4 == 0`), F (1bpp, values 0-1, `width % 8 == 0`; 320 only for inference) |
 
 `export_result(result, output_path, config)` loops over `config.export_formats`, derives file
 names from the output stem (`.bin/.png/.s/.dta/.xex`), writes previews if `config.preview`, and
 **does not accept an ANTIC mode** (see 2.3). The GUI can reuse it with one backward-compatible
 keyword argument.
+
+#### 3.4.1 Colour-count audit findings (T1.7)
+
+Verified by `src/tests/test_colour_counts.py` (326 cases, ≈4 s): every palette selector, every
+quantizer and all 17 dithering algorithms behave correctly for `N ∈ {2, 3, 4, 8, 16}` — palettes hold
+exactly N unique indices, indexed pixels always stay inside `0..N-1`, metrics and the error heatmap
+work, and the results are deterministic.
+
+**Declared vs actually used colours.** `colors=N` guarantees a palette of N unique indices, but an
+algorithm may use fewer. `adaptive` picks a dither per 16×16 tile, so on the audit fixture it never
+leaves indices 0–3 at N=8, while at N=16 it reaches index 15 but only for a small part of the image
+(175 of 3072 pixels). The tests therefore assert `colors_used <= N`, never `== N`, and a separate
+regression test proves that every dithering algorithm (including `adaptive` at N=16) really uses
+indices ≥ 4.
+
+**Verified exporter limits** (each row is exercised by a test that runs the real exporter):
+
+| Format | Colours | Shape | Error when violated |
+|---|---|---|---|
+| **PNG** | ≤ **256** (technical maximum) | any | `ValueError` from NumPy when the palette exceeds 256 entries (unreachable through the pipeline, which caps at 256) |
+| **BIN / ASM / DTA** | ≤ 4 (`MAX_ATARI_COLORS`) | 160×190 or 160×192 | `Indexed values must be 0-3 for 2bpp mode` / `ANTIC E requires 160x190 or 160x192, got …` |
+| **XEX D / E** | ≤ 4 | `width % 4 == 0` | `Indexed values must be 0-3 for 2bpp mode` |
+| **XEX F** | ≤ 2 | `width % 8 == 0` | `Indexed values must be 0-1 for ANTIC F (1bpp)` |
+| **XEX, no inferable mode** | – | 160×96 → D, 160 wide → E, 320 wide → F | `Cannot infer ANTIC mode from image shape …` |
+| **XEX, unknown mode** | – | – | `Invalid ANTIC mode. Use one of: D, E, F, 7, 15, 8` |
+
+Corrections to the table above: an **explicit** mode F does not require a 320-wide image — 320 is
+only what the *inference* maps to F; with `antic_mode="F"` any width divisible by 8 packs fine, and
+an explicit D/E likewise accepts shapes other than the usual 96/192 lines because it falls back to
+`_pack_2bpp`.
+
+**Known gaps, documented but deliberately not fixed by T1.7:**
+
+- XEX widths that do not fit the packing unit (D/E: `% 4`, F: `% 8`) raise a bare **`IndexError`**
+  (`index N is out of bounds`) instead of a validated `ValueError`; see T1.4 (export helpers).
+- PNG with more than 256 palette entries fails inside NumPy (`could not broadcast … (771,) into
+  (768,)`); the pipeline never produces such a palette because `_fill_palette` caps at 256.
+- `colors > 256` is silently reduced to 256 entries by `_fill_palette` (the pipeline does not call
+  `validate_config`).
+- `colors = 1` renders a single-colour image; `validate_config` keeps the GUI at 2..256.
+
+**`MAX_PNG_COLORS = 16` is a product cap, not a format limit.** PNG supports 256 colours; 16 is
+chosen for interactive speed (at 160×192 the palette stage grows with N: k-means 49 ms at N=2 →
+319 ms at N=16 → 4.4 s at N=256). The constant is defined in the GUI package
+(`converter_gui/limits.py`) in T2.4 and deliberately **not** in the converter core, so the CLI and the
+exporters keep the full PNG capability.
 
 ### 3.5 Preview & metrics reuse
 
@@ -983,7 +1029,7 @@ Legend used below: **[R]** reuse existing, **[F]** refactor existing, **[N]** ne
 - Tests: `test_engine_cache_integrity.py`, `test_engine_source_identity.py`.
 - Commit: may share a commit with T1.3 if both land in the same step — **never** with T0.2.
 
-**T1.7 [N] Colour-count capability audit (Q7)**
+**T1.7 [N] Colour-count capability audit (Q7) — ✅ DONE (`test_colour_counts.py`)**
 - Do: prove the pipeline is correct for N > 4 (5 palette selectors, all 18 dithers, 4 quantizers,
   metrics, heatmap) and record the exact per-exporter limits that `check_export_compatibility` reports.
 - Files: `src/tests/test_colour_counts.py`; findings appended to §3.4 of this plan.
@@ -992,6 +1038,11 @@ Legend used below: **[R]** reuse existing, **[F]** refactor existing, **[N]** ne
   N > 4; BIN/ASM/DTA/XEX-D/E require ≤ 4, XEX-F requires ≤ 2 (verdicts match the real exporters);
   `MAX_PNG_COLORS = 16` documented as the GUI cap.
 - Result: the GUI colour range (2–4, extended to 16 for PNG-only) is backed by tests, not assumption.
+- **Result (done):** `src/tests/test_colour_counts.py` (326 cases, ≈4 s) confirms N ∈ {2,3,4,8,16} for
+  all 5 palette selectors, all 4 quantizers and all 17 dithers, and pins the exporter limits by running
+  the real exporters. Findings, the declared-vs-used distinction (incl. `adaptive`) and the known gaps
+  (`IndexError` on bad XEX widths) are recorded in §3.4.1; `MAX_PNG_COLORS = 16` is documented there as
+  a GUI product cap, not a PNG format limit.
 
 **T1.4 [F] Export helpers**
 - Files: `src/converter/pipeline.py` (`export_result(..., antic_mode=None)`),
@@ -1286,7 +1337,7 @@ Legend: **[R]** reuse, **[F]** refactor, **[N]** new. "golden" = `test_cli_golde
 | ☐ | **T1.2** Types/config [F] | T1.1 | `timings`, `converted_rgb`, `validate_config`, `MAX_ATARI_COLORS`; existing constructors and JSON unchanged |
 | ☐ | **T1.3** `ConversionEngine` [N] | T1.1, T1.2 | Bit-exact vs `convert_image`; cache table §8 verified by call counts; LRU eviction; cancel raises `ConversionCancelled`; no writeable array returned |
 | ☐ | **T1.6** Source identity + integrity [N] | T1.3 | `SourceIdentity`, optional SHA-256, `source_is_unchanged`; every §8.1 rule tested; `set_source_array` never aliases caller memory |
-| ☐ | **T1.7** Colour-count audit [N] | T1.1 | N ∈ {2,3,4,8,16} correct across stages; exporter limits verified; `MAX_PNG_COLORS = 16` recorded |
+| ☑ | **T1.7** Colour-count audit [N] — done | T1.1 | N ∈ {2,3,4,8,16} verified for all selectors/quantizers/dithers; exporter limits pinned by running the real exporters; §3.4.1 records the findings and `MAX_PNG_COLORS = 16` (GUI cap, not a PNG limit) |
 | ☐ | **T1.4** Export helpers [F] | T1.1, T1.7 | `export_result(antic_mode=...)`; compatibility verdicts match real exporter errors; goldens green |
 | ☐ | **T1.5** Public API [F] | T1.3 | `from converter import …` works; importing `converter.main` leaves `PySide6` out of `sys.modules` |
 
