@@ -1,0 +1,417 @@
+{
+  "cases": {
+    "all_formats_atkinson": {
+      "commands": [
+        "{input} {out}/screen.bin --export bin --export png --export asm --export dta --export xex --dither atkinson --palette median_cut --atari-colors 0x00,0x04,0x0a,0x0e --label-name TESTLABEL"
+      ],
+      "files": {
+        "screen.bin": {
+          "sha256": "a90b2000418585535b2e658a5e8997aa68c97e55cfc0f8e5ef1e860ed09c78e0",
+          "size": 7680
+        },
+        "screen.dta": {
+          "sha256": "d67b018737f73844cf10ea237b8fc32868fc2abacbef2495992ddca2ab69fb88",
+          "size": 43281
+        },
+        "screen.png": {
+          "sha256": "43f2b1f187b01f53b9f266d5224f3b632b3e75cd077030ad8473119c8b241278",
+          "size": 1338
+        },
+        "screen.s": {
+          "sha256": "ccf99acf90c87753d9c7cbc5d08d9bfb0fa3aedbef897db58017d94b217285ee",
+          "size": 43414
+        },
+        "screen.xex": {
+          "sha256": "8358756a5e3a5e88224668c4b5dc70f3312f42cfd8deb68f3544a40984aa969a",
+          "size": 7961
+        }
+      },
+      "note": "All five exporters at once, with --atari-colors and an explicit ASM label",
+      "returncodes": [
+        0
+      ],
+      "stderr": [
+        ""
+      ],
+      "stdout": [
+        ""
+      ]
+    },
+    "asm_default_label": {
+      "commands": [
+        "{input} {out}/screen.s --export asm --dither bayer2 --palette median_cut"
+      ],
+      "files": {
+        "screen.s": {
+          "sha256": "3e0d177b2732810c0fb96a03b718c74db492dfb964f1b5da90851c19f7d1a7dc",
+          "size": 43327
+        }
+      },
+      "note": "ASM export without --label-name (default SCREEN_<INPUT_STEM> name)",
+      "returncodes": [
+        0
+      ],
+      "stderr": [
+        ""
+      ],
+      "stdout": [
+        ""
+      ]
+    },
+    "background_index": {
+      "commands": [
+        "{input} {out}/screen.bin --dither none --palette median_cut --background-index 6"
+      ],
+      "files": {
+        "screen.bin": {
+          "sha256": "7f4d78b981b67ba4c527da70022e08b1ea2208f5c4a74203940abab38217524b",
+          "size": 7680
+        }
+      },
+      "note": "Explicit background colour index",
+      "returncodes": [
+        0
+      ],
+      "stderr": [
+        ""
+      ],
+      "stdout": [
+        ""
+      ]
+    },
+    "bayer8_kmeans": {
+      "commands": [
+        "{input} {out}/screen.bin --dither bayer8 --palette kmeans"
+      ],
+      "files": {
+        "screen.bin": {
+          "sha256": "cc7b06c44f0a6130c2323ac2208f1bdc8d240fa4f7a74ae5d01cd4a8c3d736de",
+          "size": 7680
+        }
+      },
+      "note": "BIN export with bayer8 and the k-means palette (fixed seed)",
+      "returncodes": [
+        0
+      ],
+      "stderr": [
+        ""
+      ],
+      "stdout": [
+        ""
+      ]
+    },
+    "config_roundtrip": {
+      "commands": [
+        "{input} {out}/first.bin --palette median_cut --dither bayer4 --save-config {out}/settings.json",
+        "{input} {out}/second.bin --config {out}/settings.json"
+      ],
+      "files": {
+        "first.bin": {
+          "sha256": "fc61555ef6ab276a5ff4813ad6879b6414698192e86e767016e7e32cccb9a437",
+          "size": 7680
+        },
+        "second.bin": {
+          "sha256": "fc61555ef6ab276a5ff4813ad6879b6414698192e86e767016e7e32cccb9a437",
+          "size": 7680
+        },
+        "settings.json": {
+          "sha256": "4b02592e68572e08be483f3d71179c35504e609437fc08cbd0b21c788fa52df9",
+          "size": 361
+        }
+      },
+      "note": "--save-config output, then a second run that loads that file",
+      "returncodes": [
+        0,
+        0
+      ],
+      "stderr": [
+        "",
+        ""
+      ],
+      "stdout": [
+        "",
+        ""
+      ]
+    },
+    "default_floyd_bin": {
+      "commands": [
+        "{input} {out}/screen.bin"
+      ],
+      "files": {
+        "screen.bin": {
+          "sha256": "2f51d75a4140e79fe30c0f5a8e02ac20ec32dcd1bed5bc98b3fa98cf078bcc9b",
+          "size": 7680
+        }
+      },
+      "note": "Default invocation (floyd, popularity, BIN inferred from the extension)",
+      "returncodes": [
+        0
+      ],
+      "stderr": [
+        ""
+      ],
+      "stdout": [
+        ""
+      ]
+    },
+    "error_atari_colors": {
+      "commands": [
+        "{input} {out}/screen.bin --atari-colors 0x00,,0x04"
+      ],
+      "files": {},
+      "note": "Invalid --atari-colors exits with code 1 and a readable message",
+      "returncodes": [
+        1
+      ],
+      "stderr": [
+        "Error parsing --atari-colors: Empty color value in --atari-colors\n"
+      ],
+      "stdout": [
+        ""
+      ]
+    },
+    "none_median_cut_bin": {
+      "commands": [
+        "{input} {out}/screen.bin --dither none --palette median_cut"
+      ],
+      "files": {
+        "screen.bin": {
+          "sha256": "7f4d78b981b67ba4c527da70022e08b1ea2208f5c4a74203940abab38217524b",
+          "size": 7680
+        }
+      },
+      "note": "dither=none with a non-default palette (B1: quantize gets range(N), not the palette)",
+      "returncodes": [
+        0
+      ],
+      "stderr": [
+        ""
+      ],
+      "stdout": [
+        ""
+      ]
+    },
+    "none_metrics": {
+      "commands": [
+        "{input} {out}/screen.bin --dither none --palette median_cut --metrics"
+      ],
+      "files": {
+        "screen.bin": {
+          "sha256": "7f4d78b981b67ba4c527da70022e08b1ea2208f5c4a74203940abab38217524b",
+          "size": 7680
+        }
+      },
+      "note": "dither=none with printed metrics (B2: metrics use range(N))",
+      "returncodes": [
+        0
+      ],
+      "stderr": [
+        ""
+      ],
+      "stdout": [
+        "MSE: 1262.35\nPSNR: 17.12 dB\nSSIM: 0.6767\nMean RGB error: 27.95\nMean luminance error: 21.53\nColors used: 4\nHistogram coverage: 100.00%\n"
+      ]
+    },
+    "none_preview": {
+      "commands": [
+        "{input} {out}/screen.bin --dither none --palette median_cut --preview"
+      ],
+      "files": {
+        "screen.bin": {
+          "sha256": "7f4d78b981b67ba4c527da70022e08b1ea2208f5c4a74203940abab38217524b",
+          "size": 7680
+        },
+        "screen_preview/screen_compare.png": {
+          "sha256": "9d3f585ac55b19ef0153859215940e79c36a13054de850feb04dd389a05e7ab3",
+          "size": 1885
+        },
+        "screen_preview/screen_error.png": {
+          "sha256": "b0648a5dd72e1e98cdc9a0a31fe008ec4ae5a402e270f9874d956d2c266c69c7",
+          "size": 3124
+        },
+        "screen_preview/screen_x2.png": {
+          "sha256": "fe64772e0aeadbe5dcc8067ac3e7af19debb4ccbe2b35d186ae2329ff4e0c134",
+          "size": 2028
+        },
+        "screen_preview/screen_x4.png": {
+          "sha256": "8826a7c5753a3e38d3bac56cb774a01f6a037aaa80c151313e9c42298d11984d",
+          "size": 4093
+        }
+      },
+      "note": "dither=none with preview images (B3: previews use range(N) instead of the palette)",
+      "returncodes": [
+        0
+      ],
+      "stderr": [
+        ""
+      ],
+      "stdout": [
+        ""
+      ]
+    },
+    "none_quantizer_adaptive": {
+      "commands": [
+        "{input} {out}/screen.bin --dither none --quantizer adaptive --palette median_cut"
+      ],
+      "files": {
+        "screen.bin": {
+          "sha256": "7f4d78b981b67ba4c527da70022e08b1ea2208f5c4a74203940abab38217524b",
+          "size": 7680
+        }
+      },
+      "note": "dither=none with the adaptive quantizer (B4: no variance map is passed)",
+      "returncodes": [
+        0
+      ],
+      "stderr": [
+        ""
+      ],
+      "stdout": [
+        ""
+      ]
+    },
+    "none_quantizer_perceptual": {
+      "commands": [
+        "{input} {out}/screen.bin --dither none --quantizer perceptual --palette median_cut"
+      ],
+      "files": {
+        "screen.bin": {
+          "sha256": "8181fc4af011f5bd067418db73ca0271d5509307b79047575914ed1740546344",
+          "size": 7680
+        }
+      },
+      "note": "dither=none with the perceptual quantizer",
+      "returncodes": [
+        0
+      ],
+      "stderr": [
+        ""
+      ],
+      "stdout": [
+        ""
+      ]
+    },
+    "png_bayer4_octree": {
+      "commands": [
+        "{input} {out}/screen.png --export png --dither bayer4 --palette octree"
+      ],
+      "files": {
+        "screen.png": {
+          "sha256": "cf1f8c3b9a8971d55bb2cb6dd0b56b91922c22665c621f6ace98d3eb95cf86ee",
+          "size": 1655
+        }
+      },
+      "note": "PNG export with an ordered dither and the octree palette",
+      "returncodes": [
+        0
+      ],
+      "stderr": [
+        ""
+      ],
+      "stdout": [
+        ""
+      ]
+    },
+    "sharpen_resize_perceptual": {
+      "commands": [
+        "{input} {out}/screen.bin --sharpen --sharpen-strength 1.5 --resize bicubic --palette perceptual"
+      ],
+      "files": {
+        "screen.bin": {
+          "sha256": "6c33bd595fc690ab597f157d68cb26d64fc7d1b708a1852492bc47a257ea61ab",
+          "size": 7680
+        }
+      },
+      "note": "Sharpen + bicubic resize + perceptual palette",
+      "returncodes": [
+        0
+      ],
+      "stderr": [
+        ""
+      ],
+      "stdout": [
+        ""
+      ]
+    },
+    "xex_extra_mode_d": {
+      "commands": [
+        "{input} {out}/screen.png --export png --width 160 --height 96 --dither bayer2 --palette median_cut -x {out}/preview_d.xex -m D"
+      ],
+      "files": {
+        "preview_d.xex": {
+          "sha256": "fad0ef28137e60ffaced830e80eb64623bb2cd8a07932f768c81b12e5836033d",
+          "size": 4007
+        },
+        "screen.png": {
+          "sha256": "186cf0cd5cc270918ef15d47a9fd19ed2277811a7a28307c1b29d8a3d37aa36b",
+          "size": 1310
+        }
+      },
+      "note": "Separate -x XEX output in ANTIC mode D (160x96, PNG main output)",
+      "returncodes": [
+        0
+      ],
+      "stderr": [
+        ""
+      ],
+      "stdout": [
+        ""
+      ]
+    },
+    "xex_extra_mode_e_190": {
+      "commands": [
+        "{input} {out}/screen.bin --height 190 --dither bayer2 --palette median_cut -x {out}/preview_e.xex -m E"
+      ],
+      "files": {
+        "preview_e.xex": {
+          "sha256": "f3a2abbddd0f618cfd35278b55b30c6c20db37fc5870faa241c5f85b9a048a9d",
+          "size": 7879
+        },
+        "screen.bin": {
+          "sha256": "057ec26d24e87a00bca44a8308012a552b6ec9500e30a082c833294bc07c2455",
+          "size": 7600
+        }
+      },
+      "note": "Separate -x XEX output in ANTIC mode E with a 190-line screen",
+      "returncodes": [
+        0
+      ],
+      "stderr": [
+        ""
+      ],
+      "stdout": [
+        ""
+      ]
+    },
+    "xex_extra_mode_f": {
+      "commands": [
+        "{input} {out}/screen.png --export png --width 320 --height 192 --colors 2 --dither bayer2 --palette median_cut -x {out}/preview_f.xex -m F"
+      ],
+      "files": {
+        "preview_f.xex": {
+          "sha256": "5627737e239a9849c69de24b3389a7d3bf6ab35a73ceb6e130803905838f41fc",
+          "size": 7961
+        },
+        "screen.png": {
+          "sha256": "31bcca0c2c3525b28bb87dd044a117a5497efce95491c4873e084db0bee63a25",
+          "size": 1437
+        }
+      },
+      "note": "Separate -x XEX output in ANTIC mode F (320x192, 2 colours, 1bpp)",
+      "returncodes": [
+        0
+      ],
+      "stderr": [
+        ""
+      ],
+      "stdout": [
+        ""
+      ]
+    }
+  },
+  "input": {
+    "file": "reference.png",
+    "sha256": "398258a36eb493e0ae24947bae0bef0bfa612a59b9c6cded71f2e1baa3704285"
+  },
+  "version": 1
+}
