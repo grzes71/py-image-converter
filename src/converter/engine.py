@@ -11,6 +11,7 @@ Cached arrays are read-only views over immutable ``bytes`` buffers: a plain
 
 from __future__ import annotations
 
+import hashlib
 import time
 from collections import OrderedDict
 from collections.abc import Callable
@@ -36,6 +37,7 @@ from converter.types import (
     IndexedImage,
     MetricResult,
     RGBImage,
+    SourceIdentity,
 )
 
 _L1_CAPACITY = 4  # prepared images (plus their edge masks), plan §8
@@ -60,6 +62,12 @@ def _freeze(value: object) -> object:
     if isinstance(value, np.ndarray):
         return _freeze_array(value)
     return value
+
+
+def _file_sha256(path: Path) -> str:
+    """SHA-256 digest of a file's bytes, streamed from disk (stdlib, plan §5.2)."""
+    with path.open("rb") as handle:
+        return hashlib.file_digest(handle, "sha256").hexdigest()
 
 
 class _LRU:
@@ -130,7 +138,7 @@ class ConversionEngine:
         """
         if max_results < 1:
             raise ValueError(f"max_results must be >= 1 (got {max_results})")
-        self._source_key: tuple | None = None
+        self._source_identity: SourceIdentity | None = None
         self._source: RGBImage | None = None
         self._array_token = 0
         self._l1 = _LRU(_L1_CAPACITY)
@@ -138,12 +146,24 @@ class ConversionEngine:
         self._l3 = _LRU(max_results)
         self._l4 = _LRU(max_results)
 
-    def set_source(self, path: str | Path) -> None:
-        """Load an image file and drop every cached stage."""
+    def set_source(self, path: str | Path, *, verify_content: bool = False) -> None:
+        """Load an image file, record its identity and drop every cached stage.
+
+        The recorded identity is the cheap ``(resolved path, size, mtime_ns)`` triple.
+        ``verify_content=True`` adds a SHA-256 digest of the file bytes, which is the only way to
+        notice a rewrite that keeps both the size and the modification time (and, conversely, the
+        reason a bare ``touch`` still counts as unchanged). Hashing reads the whole file, so it is
+        meant for explicit reload/verification paths, never for the interactive conversion path.
+        """
         resolved = Path(path).resolve()
         frozen = _freeze_array(load_image(resolved).data)
         stat = resolved.stat()
-        self._source_key = ("path", str(resolved), stat.st_size, stat.st_mtime_ns)
+        self._source_identity = SourceIdentity(
+            path=str(resolved),
+            size=stat.st_size,
+            mtime_ns=stat.st_mtime_ns,
+            sha256=_file_sha256(resolved) if verify_content else None,
+        )
         self._source = frozen
         self._clear_derived()
 
@@ -151,7 +171,7 @@ class ConversionEngine:
         """Use an in-memory image; the caller's array is copied and never aliased."""
         copy = np.array(image, dtype=np.uint8, copy=True)
         self._array_token += 1
-        self._source_key = ("array", self._array_token)
+        self._source_identity = SourceIdentity(array_token=self._array_token)
         self._source = _freeze_array(copy)
         self._clear_derived()
 
@@ -159,6 +179,50 @@ class ConversionEngine:
     def source(self) -> RGBImage | None:
         """The loaded source image as a read-only view (``None`` before ``set_source``)."""
         return self._source
+
+    @property
+    def source_identity(self) -> SourceIdentity | None:
+        """Identity recorded by the last ``set_source*()`` call (``None`` before the first one).
+
+        Stable across conversions: it describes what was loaded, not the file as it is now. Use
+        ``source_is_unchanged()`` to compare the recorded identity with the file on disk.
+        """
+        return self._source_identity
+
+    def source_is_unchanged(self, *, verify_content: bool = False) -> bool:
+        """Report whether the source still matches the identity recorded when it was loaded.
+
+        The default check compares the resolved path, the size and ``mtime_ns`` - what the
+        interactive path can afford. ``verify_content=True`` re-hashes the file instead, which
+        detects a rewrite that kept the size and the modification time, while a bare ``touch`` (new
+        mtime, same bytes) counts as unchanged. If the source was recorded without a digest, only
+        the cheap fields can be compared, so such a rewrite stays undetected until the source is
+        loaded with ``verify_content=True``.
+
+        An array source is always unchanged: ``set_source_array()`` copied the data, so the caller
+        has no reference the engine could observe. Returns ``False`` when no source has been set.
+        """
+        identity = self._source_identity
+        if identity is None:
+            return False
+        if identity.array_token is not None:
+            return True  # private frozen copy: nothing outside the engine can change it
+        if identity.path is None or identity.size is None or identity.mtime_ns is None:
+            return False
+
+        path = Path(identity.path)
+        try:
+            stat = path.stat()
+        except OSError:
+            return False
+
+        same_stat = stat.st_size == identity.size and stat.st_mtime_ns == identity.mtime_ns
+        if not verify_content or identity.sha256 is None:
+            return same_stat
+        try:
+            return _file_sha256(path) == identity.sha256
+        except OSError:
+            return False
 
     def clear_cache(self) -> None:
         """Drop the derived caches (L1-L4); the loaded source is kept."""

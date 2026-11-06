@@ -222,3 +222,26 @@ class ConversionConfig:
             atari_colors=data.get("atari_colors"),
             label_name=data.get("label_name"),
         )
+
+
+@dataclass(frozen=True)
+class SourceIdentity:
+    """Immutable identity of the loaded source image (the L0 key, plan §5.2 and §8).
+
+    A file source is identified by its resolved path, its size and its ``mtime_ns`` - cheap enough
+    for the interactive path. ``sha256`` is filled in only when the source was loaded with
+    ``verify_content=True``: hashing reads the whole file, and the digest is the only field that
+    notices a rewrite that keeps both the size and the modification time.
+
+    A source installed through ``set_source_array()`` has no path, size or mtime; it is identified by
+    ``array_token``, which changes on every call because the engine keeps a private frozen copy of the
+    caller's array.
+
+    Every field is an immutable scalar, so instances are hashable and usable as cache keys.
+    """
+
+    path: str | None = None
+    size: int | None = None
+    mtime_ns: int | None = None
+    sha256: str | None = None
+    array_token: int | None = None

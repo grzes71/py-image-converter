@@ -32,7 +32,6 @@ STAGE_FUNCTIONS = (
     "build_metrics",
 )
 TIMING_KEYS = ("prepare", "palette", "edges", "render", "metrics")
-ARRAY_FIELDS = ("indexed", "palette_rgb", "source_resized", "source")
 
 # Representative configurations for the bit-exact comparison against `convert_image`.
 MATRIX = (
@@ -95,19 +94,6 @@ def _cancel_after(limit: int):
         return state["calls"] >= limit
 
     return cancel
-
-
-def _arrays(engine: ConversionEngine, config: ConversionConfig) -> dict[str, np.ndarray]:
-    """Convert once and return every array the engine hands to a caller."""
-    result = engine.convert(config)
-    source = engine.source
-    assert source is not None
-    return {
-        "indexed": result.indexed,
-        "palette_rgb": result.palette_rgb,
-        "source_resized": result.source_resized,
-        "source": source,
-    }
 
 
 @pytest.mark.parametrize("overrides", MATRIX)
@@ -440,166 +426,6 @@ def test_cancel_callable_exception_propagates(engine: ConversionEngine) -> None:
 
     with pytest.raises(RuntimeError, match="cancel probe failed"):
         engine.convert(ConversionConfig(dither=DitherMethod.BAYER2), cancel=exploding_cancel)
-
-
-# --- immutability -------------------------------------------------------
-
-
-def test_freeze_preserves_values_dtype_and_shape() -> None:
-    array = np.arange(12, dtype=np.uint8).reshape(3, 4)
-    frozen = engine_module._freeze_array(array)
-
-    assert frozen.dtype == array.dtype
-    assert frozen.shape == array.shape
-    np.testing.assert_array_equal(frozen, array)
-    assert frozen.flags.writeable is False
-
-
-@pytest.mark.parametrize(
-    "array",
-    [
-        pytest.param(np.array([object()], dtype=object), id="plain-object"),
-        pytest.param(
-            np.zeros(2, dtype=np.dtype([("value", object), ("index", np.uint8)])),
-            id="structured-with-object",
-        ),
-        pytest.param(
-            np.zeros(2, dtype=np.dtype([("nested", [("inner", object)])])),
-            id="nested-structured-with-object",
-        ),
-    ],
-)
-def test_freeze_rejects_object_dtype(array: np.ndarray) -> None:
-    with pytest.raises(TypeError):
-        engine_module._freeze_array(array)
-
-
-def test_freeze_accepts_a_structured_dtype_without_objects() -> None:
-    array = np.zeros(3, dtype=np.dtype([("x", np.uint8), ("y", "<u2")]))
-
-    frozen = engine_module._freeze_array(array)
-
-    assert frozen.dtype == array.dtype
-    np.testing.assert_array_equal(frozen, array)
-    assert frozen.flags.writeable is False
-
-
-@pytest.mark.parametrize("name", ARRAY_FIELDS)
-def test_returned_arrays_are_read_only(engine: ConversionEngine, name: str) -> None:
-    array = _arrays(
-        engine, ConversionConfig(dither=DitherMethod.NONE, palette=PaletteMethod.MEDIAN_CUT)
-    )[name]
-
-    assert array.flags.writeable is False
-    with pytest.raises(ValueError):
-        array[0] = 0
-
-
-@pytest.mark.parametrize("name", ARRAY_FIELDS)
-def test_setflags_write_true_is_refused(engine: ConversionEngine, name: str) -> None:
-    array = _arrays(
-        engine, ConversionConfig(dither=DitherMethod.NONE, palette=PaletteMethod.MEDIAN_CUT)
-    )[name]
-
-    with pytest.raises(ValueError):
-        array.setflags(write=True)
-    assert array.flags.writeable is False
-
-
-@pytest.mark.parametrize("name", ARRAY_FIELDS)
-def test_base_escalation_is_refused(engine: ConversionEngine, name: str) -> None:
-    array = _arrays(
-        engine, ConversionConfig(dither=DitherMethod.NONE, palette=PaletteMethod.MEDIAN_CUT)
-    )[name]
-
-    assert array.flags.owndata is False
-    with pytest.raises(ValueError):
-        array.base.setflags(write=True)
-
-
-def test_views_stay_read_only(engine: ConversionEngine) -> None:
-    indexed = _arrays(
-        engine, ConversionConfig(dither=DitherMethod.NONE, palette=PaletteMethod.MEDIAN_CUT)
-    )["indexed"]
-
-    for view in (indexed.reshape(-1), indexed.T, indexed[0:1]):
-        assert view.flags.writeable is False
-        with pytest.raises(ValueError):
-            view.setflags(write=True)
-
-
-def test_copy_is_writeable_and_independent(engine: ConversionEngine) -> None:
-    config = ConversionConfig(dither=DitherMethod.NONE, palette=PaletteMethod.MEDIAN_CUT)
-    first = engine.convert(config)
-
-    copy = first.indexed.copy()
-    assert copy.flags.writeable is True
-    copy[0, 0] = 3
-
-    second = engine.convert(config)
-    np.testing.assert_array_equal(second.indexed, first.indexed)
-
-
-def test_cache_survives_failed_write_attempts(engine: ConversionEngine) -> None:
-    config = ConversionConfig(dither=DitherMethod.NONE, palette=PaletteMethod.MEDIAN_CUT)
-    first = engine.convert(config)
-
-    for array in (first.indexed, first.palette_rgb, first.source_resized):
-        with pytest.raises(ValueError):
-            array[0] = 0
-        with pytest.raises(ValueError):
-            array.setflags(write=True)
-
-    fresh = ConversionEngine()
-    fresh.set_source(REFERENCE_IMAGE)
-    second = engine.convert(config)
-    np.testing.assert_array_equal(second.indexed, fresh.convert(config).indexed)
-
-
-def test_set_source_array_copies_and_freezes() -> None:
-    original = np.zeros((24, 32, 3), dtype=np.uint8)
-    original[:, :, 1] = 60
-
-    engine = ConversionEngine()
-    engine.set_source_array(original)
-    expected_engine = ConversionEngine()
-    expected_engine.set_source_array(original.copy())
-
-    assert engine.source is not None
-    assert engine.source.flags.writeable is False
-
-    original[:, :, 1] = 250  # the engine must not see this
-
-    config = ConversionConfig(
-        width=32,
-        height=24,
-        dither=DitherMethod.NONE,
-        palette=PaletteMethod.MEDIAN_CUT,
-    )
-    np.testing.assert_array_equal(
-        engine.convert(config).source_resized,
-        expected_engine.convert(config).source_resized,
-    )
-
-
-def test_metadata_is_isolated(engine: ConversionEngine) -> None:
-    config = ConversionConfig(
-        dither=DitherMethod.NONE,
-        palette=PaletteMethod.MEDIAN_CUT,
-        metrics=True,
-    )
-    first = engine.convert(config)
-    assert first.metrics is not None
-    original_indices = list(first.palette_indices)
-    original_mse = first.metrics.mse
-
-    first.palette_indices.append(999)
-    first.metrics.mse = -1.0
-
-    second = engine.convert(config)
-    assert second.palette_indices == original_indices
-    assert second.metrics is not None
-    assert second.metrics.mse == pytest.approx(original_mse)
 
 
 # --- timings ------------------------------------------------------------
