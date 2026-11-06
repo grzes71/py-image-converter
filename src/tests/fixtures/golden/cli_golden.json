@@ -64,7 +64,7 @@
       ],
       "files": {
         "screen.bin": {
-          "sha256": "7f4d78b981b67ba4c527da70022e08b1ea2208f5c4a74203940abab38217524b",
+          "sha256": "3e8f193b392adad096e27d094010f59be1b3014c860668f210d891a5e351ec2d",
           "size": 7680
         }
       },
@@ -176,7 +176,7 @@
       ],
       "files": {
         "screen.bin": {
-          "sha256": "7f4d78b981b67ba4c527da70022e08b1ea2208f5c4a74203940abab38217524b",
+          "sha256": "6778a41c57c625e5304e7408af87e047cb9bdc28934115c8de3a7f28269a1fa9",
           "size": 7680
         }
       },
@@ -197,7 +197,7 @@
       ],
       "files": {
         "screen.bin": {
-          "sha256": "7f4d78b981b67ba4c527da70022e08b1ea2208f5c4a74203940abab38217524b",
+          "sha256": "6778a41c57c625e5304e7408af87e047cb9bdc28934115c8de3a7f28269a1fa9",
           "size": 7680
         }
       },
@@ -209,7 +209,7 @@
         ""
       ],
       "stdout": [
-        "MSE: 1262.35\nPSNR: 17.12 dB\nSSIM: 0.6767\nMean RGB error: 27.95\nMean luminance error: 21.53\nColors used: 4\nHistogram coverage: 100.00%\n"
+        "MSE: 972.70\nPSNR: 18.25 dB\nSSIM: 0.7588\nMean RGB error: 24.67\nMean luminance error: 21.33\nColors used: 4\nHistogram coverage: 62.88%\n"
       ]
     },
     "none_preview": {
@@ -218,24 +218,24 @@
       ],
       "files": {
         "screen.bin": {
-          "sha256": "7f4d78b981b67ba4c527da70022e08b1ea2208f5c4a74203940abab38217524b",
+          "sha256": "6778a41c57c625e5304e7408af87e047cb9bdc28934115c8de3a7f28269a1fa9",
           "size": 7680
         },
         "screen_preview/screen_compare.png": {
-          "sha256": "9d3f585ac55b19ef0153859215940e79c36a13054de850feb04dd389a05e7ab3",
-          "size": 1885
+          "sha256": "eb61e6612160fe2e12a8a8444cfcc2fa85c9bc9f4214fdb377beb895c7515ad9",
+          "size": 1762
         },
         "screen_preview/screen_error.png": {
-          "sha256": "b0648a5dd72e1e98cdc9a0a31fe008ec4ae5a402e270f9874d956d2c266c69c7",
-          "size": 3124
+          "sha256": "2125e70cba8da21d01c208594625a4ec210c4dc21f87274bd1ab6c7b4a78b794",
+          "size": 3404
         },
         "screen_preview/screen_x2.png": {
-          "sha256": "fe64772e0aeadbe5dcc8067ac3e7af19debb4ccbe2b35d186ae2329ff4e0c134",
-          "size": 2028
+          "sha256": "119db09d151b346e2c228a02cb3e0ce90756c83ed3db822d56194d8294e1ee64",
+          "size": 1728
         },
         "screen_preview/screen_x4.png": {
-          "sha256": "8826a7c5753a3e38d3bac56cb774a01f6a037aaa80c151313e9c42298d11984d",
-          "size": 4093
+          "sha256": "36afd215fa1272da214e3e06ca2fb826373e5dd715406e6815cc07d2ed8fcb6e",
+          "size": 3755
         }
       },
       "note": "dither=none with preview images (B3: previews use range(N) instead of the palette)",
@@ -255,7 +255,7 @@
       ],
       "files": {
         "screen.bin": {
-          "sha256": "7f4d78b981b67ba4c527da70022e08b1ea2208f5c4a74203940abab38217524b",
+          "sha256": "44cd3c15b2f7337887f4f8143ec766408e706d3ed4847423708d15baa51e4dc4",
           "size": 7680
         }
       },
@@ -276,7 +276,7 @@
       ],
       "files": {
         "screen.bin": {
-          "sha256": "8181fc4af011f5bd067418db73ca0271d5509307b79047575914ed1740546344",
+          "sha256": "c6a280aa477e60f7ca9f5d6d3023b552289bad37521211a2a2d5c554eb6265b6",
           "size": 7680
         }
       },

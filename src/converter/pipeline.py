@@ -11,7 +11,7 @@ from converter.exporters.atari_bin_export import export_bin
 from converter.exporters.atari_dta_export import export_dta
 from converter.exporters.png_export import export_png
 from converter.exporters.xex_export import export_xex
-from converter.histogram import analyze_histogram
+from converter.histogram import compute_local_variance
 from converter.image_loader import load_image
 from converter.metrics import compute_metrics, format_metrics
 from converter.palette import palette_rgb, select_palette
@@ -19,7 +19,13 @@ from converter.preview import generate_previews
 from converter.quantizer import indexed_to_rgb, quantize
 from converter.resize import resize_image
 from converter.sharpen import apply_sharpen
-from converter.types import ConversionConfig, ConversionResult, DitherMethod, ExportFormat
+from converter.types import (
+    ConversionConfig,
+    ConversionResult,
+    DitherMethod,
+    ExportFormat,
+    QuantizerMethod,
+)
 
 
 def convert_image(input_path: str | Path, config: ConversionConfig) -> ConversionResult:
@@ -29,8 +35,6 @@ def convert_image(input_path: str | Path, config: ConversionConfig) -> Conversio
 
     resized = resize_image(image, config.width, config.height, config.resize)
     sharpened = apply_sharpen(resized, config.sharpen, config.sharpen_strength)
-
-    hist_report = analyze_histogram(sharpened, full=config.dither == DitherMethod.ADAPTIVE)
 
     palette_indices = select_palette(
         sharpened,
@@ -43,18 +47,19 @@ def convert_image(input_path: str | Path, config: ConversionConfig) -> Conversio
     edge_mask = detect_edges(sharpened)
 
     if config.dither == DitherMethod.NONE:
-        indexed = quantize(
-            sharpened,
-            list(range(len(palette_indices))),
-            config.quantizer,
-            hist_report.local_variance,
-        )
+        # The adaptive quantizer needs a local variance map. The histogram report that used to be
+        # computed here only carried one in "full" mode (which `dither=none` never requested), so
+        # the map never reached the quantizer and it silently behaved like `nearest` (B4).
+        variance_map = None
+        if config.quantizer == QuantizerMethod.ADAPTIVE:
+            variance_map = compute_local_variance(sharpened)
+        indexed = quantize(sharpened, palette_indices, config.quantizer, variance_map)
     else:
         indexed = apply_dithering(sharpened, pal_rgb, config.dither, edge_mask)
 
     metrics = None
     if config.metrics:
-        metrics = compute_metrics(sharpened, indexed, list(range(len(palette_indices))))
+        metrics = compute_metrics(sharpened, indexed, palette_indices)
 
     return ConversionResult(
         indexed=indexed,
@@ -117,7 +122,7 @@ def export_result(
             generate_previews(
                 result.source_resized,
                 result.indexed,
-                list(range(len(result.palette_indices))),
+                result.palette_indices,
                 preview_dir,
                 stem,
             )
