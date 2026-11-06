@@ -71,6 +71,12 @@ FloatImage = NDArray[np.float64]
 IndexedImage = NDArray[np.uint8]
 EdgeMask = NDArray[np.float64]
 
+MAX_ATARI_COLORS = 4
+"""Hardware limit of the ANTIC 2bpp playfield (four colours in modes D/E).
+
+This is an export-only limit: the converter core and the PNG output accept more colours.
+"""
+
 
 @dataclass
 class ImageBuffer:
@@ -137,6 +143,16 @@ class ConversionResult:
     palette_rgb: NDArray[np.uint8]
     source_resized: RGBImage
     metrics: MetricResult | None = None
+    timings: dict[str, float] = field(default_factory=dict)
+
+    @property
+    def converted_rgb(self) -> RGBImage:
+        """Indexed image rendered with the selected palette colours."""
+        # Imported lazily: `converter.quantizer` imports this module (through `atari_palette`),
+        # so a module-level import here would create an import cycle.
+        from converter.quantizer import indexed_to_rgb
+
+        return indexed_to_rgb(self.indexed, self.palette_indices)
 
 
 @dataclass
