@@ -17,6 +17,21 @@ APPLICATION_NAME = "PyImageConverter"
 ORGANIZATION_NAME = "PyImageConverter"
 ORGANIZATION_DOMAIN = "pyimageconverter.local"
 
+SWITCH_INTERVAL_S = 0.001
+"""GIL switch interval for the GUI process (plan §7.2, escalation step 1).
+
+The responsiveness benchmark (T3.5, ``docs/GUI_PERFORMANCE.md``) measured the longest main-thread stall
+while the worker thread was dithering: 111 ms with CPython's default 5 ms interval, 53 ms with this
+value, while the 95th percentile and the conversion throughput stayed the same. Only the GUI process is
+affected - the CLI never imports this module, and no computed value changes.
+"""
+
+
+def configure_interpreter() -> None:
+    """Let the GUI thread get the GIL more often while a dither loop runs (plan §7.2, step 1)."""
+    if sys.getswitchinterval() != SWITCH_INTERVAL_S:
+        sys.setswitchinterval(SWITCH_INTERVAL_S)
+
 
 def create_application(argv: Sequence[str] | None = None) -> QApplication:
     """Return the application object, creating it once and applying the metadata.
@@ -24,6 +39,7 @@ def create_application(argv: Sequence[str] | None = None) -> QApplication:
     An existing instance (created by a test harness, for example) is reused instead of creating a
     second ``QApplication``, which Qt does not allow.
     """
+    configure_interpreter()
     application = QApplication.instance()
     if not isinstance(application, QApplication):
         application = QApplication(list(argv) if argv is not None else sys.argv)

@@ -688,11 +688,19 @@ def test_the_real_backend_converts_a_fixture_image(qtbot) -> None:
 
 
 def test_create_application_sets_the_metadata(qtbot) -> None:
-    application = converter_gui.app.create_application([])
-
-    assert isinstance(application, QApplication)
-    assert application.applicationName() == "PyImageConverter"
-    assert application.organizationName() == "PyImageConverter"
+    original_interval = sys.getswitchinterval()
+    try:
+        application = converter_gui.app.create_application([])
+        assert isinstance(application, QApplication)
+        assert application.applicationName() == "PyImageConverter"
+        assert application.organizationName() == "PyImageConverter"
+        # Plan §7.2 escalation step 1: the GUI process gets a shorter GIL switch interval so the event
+        # loop is not starved while a dither loop holds the interpreter (see docs/GUI_PERFORMANCE.md).
+        assert sys.getswitchinterval() == converter_gui.app.SWITCH_INTERVAL_S
+        converter_gui.app.configure_interpreter()  # idempotent
+        assert sys.getswitchinterval() == converter_gui.app.SWITCH_INTERVAL_S
+    finally:
+        sys.setswitchinterval(original_interval)
 
 
 def test_main_shows_the_window_and_returns_the_event_loop_code(qtbot, monkeypatch) -> None:

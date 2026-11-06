@@ -34,7 +34,11 @@ testpaths = ["src/tests"]
 pythonpath = ["src"]
 # pytest-qt lives in the "dev" extra while PySide6 lives in "gui". Without Qt the plugin aborts the
 # whole session, so it is never autoloaded; conftest.py loads it explicitly when PySide6 exists.
-addopts = "-p no:pytest-qt"
+# The responsiveness benchmark is marked "slow" and excluded here; run it with `-m slow`.
+addopts = '-p no:pytest-qt -m "not slow"'
+markers = [
+    "slow: long-running benchmark, excluded from the default run (use -m slow)",
+]
 
 [tool.ruff]
 line-length = 100
