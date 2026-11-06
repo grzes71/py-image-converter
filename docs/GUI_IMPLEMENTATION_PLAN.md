@@ -18,6 +18,7 @@
 > | 2 | 2026-11-06 | Q1–Q14 answered by the user (see §16), extra requirements integrated (cache integrity, responsiveness measurement, stale-result rules), tasks added (T0.3, T1.6, T1.7, T2.7, T3.5, Phase 6), §17 checklist and §18 commit plan added |
 > | 3 | 2026-11-06 | Phase 0 progress: T0.1 (`0b073cf`) and T0.2 (`cb47a36`) completed, B1–B4 fixed and verified, 59 tests green; T0.3 started. See §20 for the evidence |
 > | 4 | 2026-11-06 | **Phase 0 complete** — T0.1 (`0b073cf`), T0.2 (`cb47a36`) and T0.3 (`f345c4a`) done and accepted. Phase 1 (T1.1) **not started**; it needs a separate go-ahead |
+> | 5 | 2026-11-06 | T1.4 done (`09cde5b`): `check_export_compatibility`, public `normalize_antic_mode`, `export_result(..., antic_mode=...)`. Export architecture, verdict rules and the format-vs-product limit split documented in **§3.4.2**; §5.3 and §10 corrected to the implemented signature; evidence in §20.3 |
 
 ---
 
@@ -209,10 +210,12 @@ B1–B4 directly affect what a GUI would display (preview, metrics, heatmap).
 | `export_dta(indexed, path, load_address=0x6000)` | `.byte` listing | same as BIN |
 | `export_xex(indexed, path, palette_indices, antic_mode, atari_colors)` | runnable viewer | D (2bpp, `width % 4 == 0`; inferred for 160×96), E (2bpp, `width % 4 == 0`), F (1bpp, values 0-1, `width % 8 == 0`; 320 only for inference) |
 
-`export_result(result, output_path, config)` loops over `config.export_formats`, derives file
-names from the output stem (`.bin/.png/.s/.dta/.xex`), writes previews if `config.preview`, and
-**does not accept an ANTIC mode** (see 2.3). The GUI can reuse it with one backward-compatible
-keyword argument.
+`export_result(result, output_path, config, *, antic_mode=None)` loops over `config.export_formats`,
+derives file names from the output stem (`.bin/.png/.s/.dta/.xex`), writes previews if
+`config.preview`, and forwards the **keyword-only** `antic_mode` to `export_xex` only — every other
+exporter ignores it and `None` keeps the shape-based inference, so the default call path stays
+byte-identical (proved by the CLI goldens, §3.4.2). `check_export_compatibility` answers "would this
+export succeed?" before anything is written.
 
 #### 3.4.1 Colour-count audit findings (T1.7)
 
@@ -259,6 +262,60 @@ chosen for interactive speed (at 160×192 the palette stage grows with N: k-mean
 319 ms at N=16 → 4.4 s at N=256). The constant is defined in the GUI package
 (`converter_gui/limits.py`) in T2.4 and deliberately **not** in the converter core, so the CLI and the
 exporters keep the full PNG capability.
+
+#### 3.4.2 Export compatibility helper and `antic_mode` passthrough (T1.4)
+
+Three additions, all backward compatible (implemented in `09cde5b`):
+
+| API | Location | Behaviour |
+|---|---|---|
+| `check_export_compatibility(result, fmt, *, antic_mode=None) -> str \| None` | `exporters/compat.py` (new), re-exported from `converter.exporters` | `None` = the export will succeed; a string = a readable reason phrased like the exporter's own validation (the mode errors are its `ValueError` text verbatim). Writes nothing, calls no exporter |
+| `normalize_antic_mode(antic_mode, indexed) -> str` | `exporters/xex_export.py` (was private `_normalize_antic_mode`) | the single implementation of the mode rules: explicit `D`/`E`/`F`, the BASIC aliases `7`/`15`/`8`, case-insensitive; `None` infers D (160×96), E (160 wide), F (320 wide); raises `ValueError` for an unknown mode or an uninferable shape |
+| `export_result(result, output_path, config, *, antic_mode=None)` | `pipeline.py` | keyword-only, forwarded to `export_xex` **only**; PNG/BIN/ASM/DTA ignore it; `None` reproduces the previous output byte for byte |
+
+`export_xex` and the helper share the one public `normalize_antic_mode`, so the mode rules and their
+error messages cannot drift and no private name is imported across modules.
+
+**Verdicts are computed from the real result, not from the requested configuration.** The helper reads
+`result.indexed.shape` and the index values that actually occur (`indexed.max()`), plus the real number
+of palette entries — never `config.colors`. This is required because `colors=N` only guarantees a
+palette of N distinct indices: `adaptive` at N=8 may never leave indices 0–3 (§3.4.1), so a
+config-based check would grey out BIN for an image that `pack_antic_e` accepts instantly.
+
+Per-format rule table (kept in sync with §3.4.1 by the tests, not by hand):
+
+| `fmt` | Helper checks | Reused source of truth |
+|---|---|---|
+| `PNG` | palette entries ≤ 256 | `_PNG_MAX_COLORS` = size of a PNG palette chunk |
+| `BIN` / `ASM` / `DTA` | `ANTIC_E_WIDTH` × 190 or 192, then indices ≤ 3 | `ANTIC_E_WIDTH`/`ANTIC_E_HEIGHT` from `atari_bin_export`, `MAX_ATARI_COLORS` |
+| `XEX` | mode resolution, then indices ≤ 3 (D/E) or ≤ 2 (F), then the packing width | `normalize_antic_mode` + the same 2bpp/1bpp bit |
+
+**Invalid XEX widths.** D/E pack 4 pixels per byte, F packs 8 (`pixels_per_byte = 8 // bits` — derived
+from the same bpp bit, not restated per mode). For a width that is not a multiple of the unit the
+helper returns e.g. *"mode D requires a width divisible by 4 (got 158); export_xex would fail with
+IndexError"*, so the GUI can disable the format instead of crashing. The bare **`IndexError`** raised
+inside `pack_2bpp`/`pack_1bpp` for those widths is **deliberately not fixed** here (known gap, §3.4.1):
+changing exporter exception types is a separate behaviour decision; T1.4 documents it and predicts it,
+it does not mask it. The test matrix therefore accepts `ValueError` *and* `IndexError` as "the export
+really fails".
+
+A `ValueError` from `normalize_antic_mode` (unknown mode, uninferable shape) is caught and returned as
+the reason, so callers have exactly one failure channel: a string. Nothing else from `compat.py` leaks
+exporter internals.
+
+**Equivalence is proven, not assumed.** A 33-case matrix in `src/tests/test_exports.py`
+(`shape × max occurring index × palette size × format × antic_mode`) runs the *real* exporter for every
+verdict and asserts `helper is None` ⇔ the export succeeds, and a message ⇔ it raises. Further tests
+pin the message contents, the alias/inference behaviour of `normalize_antic_mode`, and — for
+`export_result` — that the default path is byte-identical, that `antic_mode` reaches `export_xex`, that
+the other formats ignore it, and that an invalid mode propagates.
+
+**Technical format limits vs GUI product limits.** Everything the helper reports is a **technical**
+limit of the format or of the current exporter: PNG 256 colours, 2bpp playfields 4, 1bpp 2, ANTIC E
+160×190/192, XEX widths matched to the packing unit. It says nothing about product policy: the GUI caps
+colours at `MAX_PNG_COLORS = 16` (interactive speed, §3.4.1) and offers 2–4 elsewhere, and it lives in
+`converter_gui/limits.py`, not in the core. A GUI-side policy may therefore be *stricter* than the
+verdict without the core ever rejecting a value the CLI accepts today.
 
 ### 3.5 Preview & metrics reuse
 
@@ -461,11 +518,14 @@ class ConversionEngine:
 
 - `config.validate_config(config) -> list[str]`: range and enum sanity (colors 2–4, sizes > 0,
   background 0–255, sharpen_strength ≥ 0). Used by GUI and preset loading. The CLI behaviour stays unchanged.
-- `exporters` compatibility helper `check_export_compatibility(result_shape, colors, fmt,
-  antic_mode) -> str | None`. It mirrors the existing exporter checks so the GUI can disable
-  formats before writing. It **calls** the same constants (`ANTIC_E_WIDTH`, …) rather than duplicating logic.
-  The per-colour-count limits it reports are confirmed by the T1.7 audit (Q7), not guessed.
-- `export_result(..., antic_mode: str | None = None)`: passed through to `export_xex`.
+- `exporters.compat.check_export_compatibility(result: ConversionResult, fmt: ExportFormat, *,
+  antic_mode: str | None = None) -> str | None` — implemented in T1.4, detailed in §3.4.2. It mirrors
+  the existing exporter checks so the GUI can disable formats before writing. It **calls** the same
+  constants (`ANTIC_E_WIDTH`, `MAX_ATARI_COLORS`, …) and the now-public `normalize_antic_mode()` rather
+  than duplicating logic, and it reads the real `ConversionResult` (shape plus the indices that actually
+  occur) instead of the requested `colors`. The per-colour-count limits it reports are confirmed by the
+  T1.7 audit (Q7), not guessed.
+- `export_result(..., *, antic_mode: str | None = None)`: passed through to `export_xex` only.
   Default `None` gives the current behaviour.
 - `converter/__init__.py` re-exports `ConversionConfig`, `ConversionResult`, `ConversionEngine`,
   `convert_image` (lazy import not needed: NumPy is already a hard dependency).
@@ -840,7 +900,7 @@ Export dialog (`dialogs/export_dialog.py`):
   will be written, using the same naming as `export_result` (`.bin/.png/.s/.dta/.xex`, `<stem>_preview/`).
 - Format checkboxes (PNG, BIN, ASM, DTA, XEX). Incompatible formats are disabled with a tooltip
   reason from `check_export_compatibility` (e.g. BIN/ASM/DTA need 160×190/192 and ≤4 colours;
-  XEX F needs width 320 and ≤2 colours).
+  mode F needs `width % 8 == 0` — 320 is only what the shape *inference* maps to F — and ≤2 colours).
 - XEX: ANTIC mode (Auto, D, E, F).
 - ASM: label name (default `SCREEN_<STEM>`, same rule as CLI).
 - ASM/XEX: atari colour registers (from the panel, with a "use converter palette" option).
@@ -1044,12 +1104,20 @@ Legend used below: **[R]** reuse existing, **[F]** refactor existing, **[N]** ne
   (`IndexError` on bad XEX widths) are recorded in §3.4.1; `MAX_PNG_COLORS = 16` is documented there as
   a GUI product cap, not a PNG format limit.
 
-**T1.4 [F] Export helpers**
-- Files: `src/converter/pipeline.py` (`export_result(..., antic_mode=None)`),
-  `src/converter/exporters/__init__.py` or new `exporters/compat.py` (`check_export_compatibility`).
+**T1.4 [F] Export helpers — ✅ DONE (`09cde5b`)**
+- Files: `src/converter/pipeline.py` (`export_result(..., *, antic_mode=None)`),
+  `src/converter/exporters/compat.py` (`check_export_compatibility`),
+  `src/converter/exporters/xex_export.py` (`_normalize_antic_mode` → public `normalize_antic_mode`),
+  `src/converter/exporters/__init__.py` (re-exports).
 - Depends: T1.1, T1.7 (supplies the verified limits)
 - Acceptance: default call path byte-identical (goldens); helper verdicts match real exporter exceptions.
 - Tests: extended `test_exports.py`.
+- **Result (done):** the helper decides from the real result (shape + occurring indices) and reuses the
+  exporter constants plus one shared `normalize_antic_mode`, so no rule is restated; widths that would
+  make `export_xex` raise the known `IndexError` are predicted instead of masked. A 33-case matrix
+  compares every verdict with an actual export attempt. `export_result` is byte-identical with the
+  default `None`. Suite 498 → **558 passed**, goldens 20/20, ruff unchanged at the 9 pre-existing
+  findings. Design: §3.4.2; evidence: §20.3.
 
 **T1.5 [F] Public API surface**
 - Files: `src/converter/__init__.py`.
@@ -1338,7 +1406,7 @@ Legend: **[R]** reuse, **[F]** refactor, **[N]** new. "golden" = `test_cli_golde
 | ☐ | **T1.3** `ConversionEngine` [N] | T1.1, T1.2 | Bit-exact vs `convert_image`; cache table §8 verified by call counts; LRU eviction; cancel raises `ConversionCancelled`; no writeable array returned |
 | ☐ | **T1.6** Source identity + integrity [N] | T1.3 | `SourceIdentity`, optional SHA-256, `source_is_unchanged`; every §8.1 rule tested; `set_source_array` never aliases caller memory |
 | ☑ | **T1.7** Colour-count audit [N] — done | T1.1 | N ∈ {2,3,4,8,16} verified for all selectors/quantizers/dithers; exporter limits pinned by running the real exporters; §3.4.1 records the findings and `MAX_PNG_COLORS = 16` (GUI cap, not a PNG limit) |
-| ☐ | **T1.4** Export helpers [F] | T1.1, T1.7 | `export_result(antic_mode=...)`; compatibility verdicts match real exporter errors; goldens green |
+| ☑ | **T1.4** Export helpers [F] — done `09cde5b` | T1.1, T1.7 | `export_result(..., *, antic_mode=None)` byte-identical by default; `check_export_compatibility(result, fmt, *, antic_mode=None)` verdicts match the real exporter errors (incl. the known XEX `IndexError` on bad widths); public `normalize_antic_mode`; goldens green |
 | ☐ | **T1.5** Public API [F] | T1.3 | `from converter import …` works; importing `converter.main` leaves `PySide6` out of `sys.modules` |
 
 ### Phase 2 — basic GUI
@@ -1503,3 +1571,42 @@ No source, test or golden file was changed by T0.3.
 **Phase 0 is complete** (T0.1–T0.3 accepted); **Phase 1 (T1.1) has not been started** and requires a
 separate go-ahead.
 
+### 20.3 Phase 1 — T1.4 (export helpers)
+
+| Task | Commit | Scope |
+|---|---|---|
+| **T1.4** Export compatibility helper + `antic_mode` passthrough | `09cde5b` | `exporters/compat.py` (new, 89 lines), `exporters/__init__.py` (re-exports), `exporters/xex_export.py` (`_normalize_antic_mode` → public `normalize_antic_mode`), `pipeline.py` (keyword-only `antic_mode`), `test_exports.py` (+281 lines) |
+
+**T1.4 result.** Five files, +388/−6. No CLI, engine, config or type change; no golden fixture touched.
+
+- **`check_export_compatibility(result, fmt, *, antic_mode=None)`** (`exporters/compat.py`, re-exported
+  from `converter.exporters`): `None` when the format can be written, otherwise a readable reason. It
+  reads the **real result** — `indexed.shape`, `indexed.max()`, `len(palette_rgb)` — not
+  `config.colors`, because `colors=N` only guarantees N palette indices and `adaptive` at N=8 may never
+  leave 0–3. Limits: PNG ≤256 entries; BIN/ASM/DTA `ANTIC_E_WIDTH` × 190/192 and indices ≤3; XEX
+  indices ≤3 (D/E) or ≤2 (F) and the packing width. An uninferable or unknown mode is reported by
+  returning the `ValueError` text from `normalize_antic_mode`, so callers handle one kind of failure.
+- **`normalize_antic_mode`** is public now (`xex_export.py`); `export_xex` and the helper call the same
+  function, so mode/alias messages cannot drift and nothing private is imported across modules.
+- **Invalid XEX widths.** D/E need `% 4 == 0`, F `% 8 == 0`. The helper reports those *before* the
+  export ("… export_xex would fail with IndexError") and the exporter's bare **`IndexError`** is left
+  unfixed — a deliberate decision recorded in §3.4.1/§3.4.2, not an oversight.
+- **`export_result(..., *, antic_mode=None)`** forwards the mode to `export_xex` only; the default path
+  is byte-identical, which the untouched CLI goldens confirm.
+
+**Tests:** `test_exports.py` 7 → **67**; full suite 498 → **558 passed** (25.6 s); goldens **20/20**
+without regeneration. The central anti-divergence test is a 33-case matrix
+(`shape × occurring index × palette size × format × antic_mode`) that runs the real exporter for every
+verdict and asserts `None` ⇔ success and a message ⇔ an exception, accepting `ValueError` *and* the
+current `IndexError`. Additional tests cover message contents, aliases `7`/`15`/`8` and case variants,
+`None`-inference (160×96 → D, 160 → E, 320 → F, 100×200 → error), explicit F at 160 wide, PNG at 4/16/
+256 entries and 257 (rejected), and `export_result` behaviour (byte-identical default, mode reaches XEX,
+other formats ignore it, invalid mode propagates).
+
+**Ruff:** `src` unchanged at the **9 pre-existing findings** (incl. the pre-existing `F401` in
+`pipeline.py`); every file touched by T1.4 is `ruff check` and `ruff format` clean.
+
+**Recording deviations:** the ANTIC E height pair (190/192) is a small private constant in `compat.py`
+commented with its origin, so `atari_bin_export.py` stayed untouched; the packing width is derived from
+the bpp bit (`8 // bits`) rather than restated per mode. Both are documented in §3.4.2. `MAX_PNG_COLORS`
+was **not** added to the core (still a GUI product cap, T2.4). T1.5 and T1.6 were not started.
