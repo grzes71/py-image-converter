@@ -11,7 +11,7 @@ from converter.exporters.atari_bin_export import export_bin
 from converter.exporters.atari_dta_export import export_dta
 from converter.exporters.png_export import export_png
 from converter.exporters.xex_export import export_xex
-from converter.histogram import analyze_histogram
+from converter.histogram import compute_local_variance
 from converter.image_loader import load_image
 from converter.metrics import compute_metrics, format_metrics
 from converter.palette import palette_rgb, select_palette
@@ -19,48 +19,75 @@ from converter.preview import generate_previews
 from converter.quantizer import indexed_to_rgb, quantize
 from converter.resize import resize_image
 from converter.sharpen import apply_sharpen
-from converter.types import ConversionConfig, ConversionResult, DitherMethod, ExportFormat
+from converter.types import (
+    ConversionConfig,
+    ConversionResult,
+    DitherMethod,
+    EdgeMask,
+    ExportFormat,
+    IndexedImage,
+    MetricResult,
+    QuantizerMethod,
+    RGBImage,
+)
+
+
+def prepare_image(image: RGBImage, config: ConversionConfig) -> RGBImage:
+    """Resize and optionally sharpen the source image."""
+    resized = resize_image(image, config.width, config.height, config.resize)
+    return apply_sharpen(resized, config.sharpen, config.sharpen_strength)
+
+
+def choose_palette(image: RGBImage, config: ConversionConfig) -> list[int]:
+    """Select the Atari palette indices for a prepared image."""
+    return select_palette(image, config.colors, config.palette, config.background_index)
+
+
+def compute_edges(image: RGBImage) -> EdgeMask:
+    """Detect the edge mask used by the dithering algorithms."""
+    return detect_edges(image)
+
+
+def render_indexed(
+    image: RGBImage,
+    palette_indices: list[int],
+    edge_mask: EdgeMask,
+    config: ConversionConfig,
+) -> IndexedImage:
+    """Render the indexed image: quantize for `dither=none`, dither for every other method."""
+    if config.dither == DitherMethod.NONE:
+        # The adaptive quantizer needs a local variance map. The histogram report that used to be
+        # computed here only carried one in "full" mode (which `dither=none` never requested), so
+        # the map never reached the quantizer and it silently behaved like `nearest` (B4).
+        variance_map = None
+        if config.quantizer == QuantizerMethod.ADAPTIVE:
+            variance_map = compute_local_variance(image)
+        return quantize(image, palette_indices, config.quantizer, variance_map)
+    return apply_dithering(image, palette_rgb(palette_indices), config.dither, edge_mask)
+
+
+def build_metrics(
+    image: RGBImage,
+    indexed: IndexedImage,
+    palette_indices: list[int],
+) -> MetricResult:
+    """Compute the quality metrics of a rendered image."""
+    return compute_metrics(image, indexed, palette_indices)
 
 
 def convert_image(input_path: str | Path, config: ConversionConfig) -> ConversionResult:
     """Run the full conversion pipeline."""
-    buffer = load_image(input_path)
-    image = buffer.data
-
-    resized = resize_image(image, config.width, config.height, config.resize)
-    sharpened = apply_sharpen(resized, config.sharpen, config.sharpen_strength)
-
-    hist_report = analyze_histogram(sharpened, full=config.dither == DitherMethod.ADAPTIVE)
-
-    palette_indices = select_palette(
-        sharpened,
-        config.colors,
-        config.palette,
-        config.background_index,
-    )
-    pal_rgb = palette_rgb(palette_indices)
-
-    edge_mask = detect_edges(sharpened)
-
-    if config.dither == DitherMethod.NONE:
-        indexed = quantize(
-            sharpened,
-            list(range(len(palette_indices))),
-            config.quantizer,
-            hist_report.local_variance,
-        )
-    else:
-        indexed = apply_dithering(sharpened, pal_rgb, config.dither, edge_mask)
-
-    metrics = None
-    if config.metrics:
-        metrics = compute_metrics(sharpened, indexed, list(range(len(palette_indices))))
+    image = prepare_image(load_image(input_path).data, config)
+    palette_indices = choose_palette(image, config)
+    edge_mask = compute_edges(image)
+    indexed = render_indexed(image, palette_indices, edge_mask, config)
+    metrics = build_metrics(image, indexed, palette_indices) if config.metrics else None
 
     return ConversionResult(
         indexed=indexed,
         palette_indices=palette_indices,
-        palette_rgb=pal_rgb,
-        source_resized=sharpened,
+        palette_rgb=palette_rgb(palette_indices),
+        source_resized=image,
         metrics=metrics,
     )
 
@@ -69,8 +96,14 @@ def export_result(
     result: ConversionResult,
     output_path: str | Path,
     config: ConversionConfig,
+    *,
+    antic_mode: str | None = None,
 ) -> list[Path]:
-    """Export conversion result to requested formats."""
+    """Export conversion result to requested formats.
+
+    ``antic_mode`` is forwarded to the XEX exporter only (``None`` keeps the shape-based inference);
+    the other formats ignore it.
+    """
     output_path = Path(output_path)
     stem = output_path.stem
     parent = output_path.parent
@@ -107,6 +140,7 @@ def export_result(
             export_xex(
                 result.indexed, p,
                 palette_indices=result.palette_indices,
+                antic_mode=antic_mode,
                 atari_colors=config.atari_colors,
             )
             exported.append(p)
@@ -117,7 +151,7 @@ def export_result(
             generate_previews(
                 result.source_resized,
                 result.indexed,
-                list(range(len(result.palette_indices))),
+                result.palette_indices,
                 preview_dir,
                 stem,
             )

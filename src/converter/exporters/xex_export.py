@@ -128,7 +128,13 @@ def _infer_antic_mode(indexed: IndexedImage) -> str:
     )
 
 
-def _normalize_antic_mode(antic_mode: str | None, indexed: IndexedImage) -> str:
+def normalize_antic_mode(antic_mode: str | None, indexed: IndexedImage) -> str:
+    """Return the effective ANTIC mode ("D", "E" or "F") for an image.
+
+    ``antic_mode=None`` infers the mode from the image shape; an explicit value accepts D/E/F and the
+    BASIC aliases 7/15/8 (case-insensitive). Raises ``ValueError`` when the mode is invalid or cannot
+    be inferred. Shared by the XEX exporter and the export-compatibility helper.
+    """
     if antic_mode is None:
         return _infer_antic_mode(indexed)
     normalized = _MODE_MAP.get(str(antic_mode).upper())
@@ -250,7 +256,7 @@ def export_xex(
 ) -> None:
     """Export an executable Atari XEX viewer for ANTIC D/E/F image preview."""
     path = Path(path)
-    mode = _normalize_antic_mode(antic_mode, indexed)
+    mode = normalize_antic_mode(antic_mode, indexed)
     h, w = indexed.shape
 
     if mode == "D":

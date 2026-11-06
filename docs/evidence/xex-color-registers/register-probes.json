@@ -1,0 +1,86 @@
+{
+  "note": "Colour-register probes captured through the altirra-bridge SDK (T0.3).",
+  "emulator_palette_relevant": {
+    "$00": [
+      0,
+      0,
+      0
+    ],
+    "$01": [
+      1,
+      1,
+      1
+    ],
+    "$AA": [
+      34,
+      185,
+      223
+    ],
+    "$AB": [
+      69,
+      202,
+      241
+    ],
+    "$B2": [
+      0,
+      53,
+      18
+    ],
+    "$EA": [
+      154,
+      183,
+      41
+    ],
+    "$EC": [
+      190,
+      217,
+      86
+    ]
+  },
+  "gtia_baseline": {
+    "COLPM0": "$00",
+    "COLPM1": "$00",
+    "COLPM2": "$00",
+    "COLPM3": "$00",
+    "COLPF0": "$00",
+    "COLPF1": "$ec",
+    "COLPF2": "$b2",
+    "COLPF3": "$aa",
+    "COLBK": "$00"
+  },
+  "shadow_bytes_02c0_02c8": {
+    "PCOLR0": 0,
+    "COLOR0": 0,
+    "COLOR1": 236,
+    "COLOR2": 178,
+    "COLOR3": 171,
+    "COLOR4": 0
+  },
+  "poke_shadow_effects": {
+    "PCOLR0": {
+      "COLPM0": "$1e"
+    },
+    "COLOR0": {},
+    "COLOR1": {},
+    "COLOR2": {},
+    "COLOR3": {},
+    "COLOR4": {}
+  },
+  "poke_shadow_note": "COLOR0-4 pokes appear ineffective because the XEX init ends with JMP $3800 and re-runs continuously, restoring the shadows within a frame; PCOLR0 is not touched by the program, so its effect is visible.",
+  "hwpoke_direct": {
+    "COLPF0": {},
+    "COLPF1": {},
+    "COLBK": {}
+  },
+  "latch_read_proof": {
+    "COLPM0": "$00",
+    "COLPM1": "$00",
+    "COLPM2": "$00",
+    "COLPM3": "$00",
+    "COLPF0": "$00",
+    "COLPF1": "$1e",
+    "COLPF2": "$b2",
+    "COLPF3": "$aa",
+    "COLBK": "$00"
+  }
+}

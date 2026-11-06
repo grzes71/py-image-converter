@@ -71,6 +71,12 @@ FloatImage = NDArray[np.float64]
 IndexedImage = NDArray[np.uint8]
 EdgeMask = NDArray[np.float64]
 
+MAX_ATARI_COLORS = 4
+"""Hardware limit of the ANTIC 2bpp playfield (four colours in modes D/E).
+
+This is an export-only limit: the converter core and the PNG output accept more colours.
+"""
+
 
 @dataclass
 class ImageBuffer:
@@ -137,6 +143,16 @@ class ConversionResult:
     palette_rgb: NDArray[np.uint8]
     source_resized: RGBImage
     metrics: MetricResult | None = None
+    timings: dict[str, float] = field(default_factory=dict)
+
+    @property
+    def converted_rgb(self) -> RGBImage:
+        """Indexed image rendered with the selected palette colours."""
+        # Imported lazily: `converter.quantizer` imports this module (through `atari_palette`),
+        # so a module-level import here would create an import cycle.
+        from converter.quantizer import indexed_to_rgb
+
+        return indexed_to_rgb(self.indexed, self.palette_indices)
 
 
 @dataclass
@@ -206,3 +222,26 @@ class ConversionConfig:
             atari_colors=data.get("atari_colors"),
             label_name=data.get("label_name"),
         )
+
+
+@dataclass(frozen=True)
+class SourceIdentity:
+    """Immutable identity of the loaded source image (the L0 key, plan §5.2 and §8).
+
+    A file source is identified by its resolved path, its size and its ``mtime_ns`` - cheap enough
+    for the interactive path. ``sha256`` is filled in only when the source was loaded with
+    ``verify_content=True``: hashing reads the whole file, and the digest is the only field that
+    notices a rewrite that keeps both the size and the modification time.
+
+    A source installed through ``set_source_array()`` has no path, size or mtime; it is identified by
+    ``array_token``, which changes on every call because the engine keeps a private frozen copy of the
+    caller's array.
+
+    Every field is an immutable scalar, so instances are hashable and usable as cache keys.
+    """
+
+    path: str | None = None
+    size: int | None = None
+    mtime_ns: int | None = None
+    sha256: str | None = None
+    array_token: int | None = None
