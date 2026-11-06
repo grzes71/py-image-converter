@@ -46,7 +46,7 @@ _TIMING_KEYS = ("prepare", "palette", "edges", "render", "metrics")
 
 def _freeze_array(array: np.ndarray) -> np.ndarray:
     """Return a read-only view over an immutable ``bytes`` buffer with the same values."""
-    if array.dtype == object:
+    if array.dtype.hasobject:
         raise TypeError("object arrays cannot be cached: the buffer is not safely immutable")
     # ``tobytes()`` copies once (and normalises to C order); the resulting array owns no data, so
     # neither a write nor ``setflags(write=True)`` nor a ``.base`` escalation can succeed.
@@ -179,6 +179,10 @@ class ConversionEngine:
 
         Raises ``ConversionCancelled`` when ``cancel()`` returns ``True`` at one of the five stage
         boundaries. Completed stages stay cached, so a later retry resumes from there.
+
+        ``timings`` measures the stage computations only: the palette stage covers both
+        ``choose_palette`` and ``palette_rgb``, while cache bookkeeping (freezing, insertion) is
+        never included.
         """
         if self._source is None:
             raise RuntimeError("set_source() must be called before convert()")
@@ -216,10 +220,11 @@ class ConversionEngine:
         else:
             started = time.perf_counter()
             indices = choose_palette(prepared, config)
+            raw_palette_rgb = palette_rgb(indices)
             timings["palette"] = time.perf_counter() - started
 
             palette_indices = tuple(indices)
-            pal_rgb = _freeze_array(palette_rgb(indices))
+            pal_rgb = _freeze_array(raw_palette_rgb)
             self._l2.put(l2_key, (palette_indices, pal_rgb))
         self._check_cancel(cancel)  # boundary 3: palette is cached
 

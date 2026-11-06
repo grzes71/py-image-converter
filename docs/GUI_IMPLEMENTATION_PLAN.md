@@ -389,9 +389,10 @@ class ConversionEngine:
 - **`timings` contract:** every result carries exactly five keys — `prepare`, `palette`, `edges`,
   `render`, `metrics` — always present and always in that order. The value is the wall-clock
   seconds the stage actually ran; **`0.0` means no work was performed**, i.e. the stage was served
-  from cache *or* intentionally skipped (metrics disabled). The two cases are told apart by
-  `result.metrics`: `None` ⇒ metrics were skipped, a `MetricResult` with `timings["metrics"] == 0.0`
-  ⇒ cached.
+  from cache *or* intentionally skipped (metrics disabled). The palette stage covers both
+  `choose_palette` and `palette_rgb`, while cache bookkeeping (freezing, insertion) is never
+  counted. The two cases are told apart by `result.metrics`: `None` ⇒ metrics were skipped, a
+  `MetricResult` with `timings["metrics"] == 0.0` ⇒ cached.
 - **Cache integrity (mandatory):** every array stored in a cache level is held as a **read-only view
   over an immutable `bytes` buffer** (`np.frombuffer(array.tobytes(), dtype=…).reshape(shape)`), and
   the engine returns those same arrays. A plain `setflags(write=False)` is **not** sufficient: NumPy

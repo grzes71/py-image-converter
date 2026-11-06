@@ -455,9 +455,33 @@ def test_freeze_preserves_values_dtype_and_shape() -> None:
     assert frozen.flags.writeable is False
 
 
-def test_freeze_rejects_object_dtype() -> None:
+@pytest.mark.parametrize(
+    "array",
+    [
+        pytest.param(np.array([object()], dtype=object), id="plain-object"),
+        pytest.param(
+            np.zeros(2, dtype=np.dtype([("value", object), ("index", np.uint8)])),
+            id="structured-with-object",
+        ),
+        pytest.param(
+            np.zeros(2, dtype=np.dtype([("nested", [("inner", object)])])),
+            id="nested-structured-with-object",
+        ),
+    ],
+)
+def test_freeze_rejects_object_dtype(array: np.ndarray) -> None:
     with pytest.raises(TypeError):
-        engine_module._freeze_array(np.array([object()], dtype=object))
+        engine_module._freeze_array(array)
+
+
+def test_freeze_accepts_a_structured_dtype_without_objects() -> None:
+    array = np.zeros(3, dtype=np.dtype([("x", np.uint8), ("y", "<u2")]))
+
+    frozen = engine_module._freeze_array(array)
+
+    assert frozen.dtype == array.dtype
+    np.testing.assert_array_equal(frozen, array)
+    assert frozen.flags.writeable is False
 
 
 @pytest.mark.parametrize("name", ARRAY_FIELDS)
@@ -650,3 +674,54 @@ def test_timings_sum_does_not_exceed_the_total_time(engine: ConversionEngine) ->
     elapsed = time.perf_counter() - started
 
     assert sum(result.timings.values()) <= elapsed + 1e-6
+
+
+def test_palette_timing_covers_palette_rgb(
+    engine: ConversionEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    delay = 0.05
+    original_palette_rgb = engine_module.palette_rgb
+
+    def slow_palette_rgb(indices: list[int]) -> np.ndarray:
+        time.sleep(delay)
+        return original_palette_rgb(indices)
+
+    monkeypatch.setattr(engine_module, "palette_rgb", slow_palette_rgb)
+    config = ConversionConfig(
+        width=64,
+        height=48,
+        dither=DitherMethod.NONE,
+        palette=PaletteMethod.MEDIAN_CUT,
+    )
+
+    result = engine.convert(config)
+
+    assert result.timings["palette"] >= delay
+
+
+def test_stage_timings_exclude_cache_bookkeeping(
+    engine: ConversionEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    delay = 0.1
+    original_freeze = engine_module._freeze_array
+    freezes = {"count": 0}
+
+    def slow_freeze(array: np.ndarray) -> np.ndarray:
+        freezes["count"] += 1
+        time.sleep(delay)
+        return original_freeze(array)
+
+    monkeypatch.setattr(engine_module, "_freeze_array", slow_freeze)
+    config = ConversionConfig(
+        width=64,
+        height=48,
+        dither=DitherMethod.NONE,
+        palette=PaletteMethod.MEDIAN_CUT,
+        metrics=True,
+    )
+
+    result = engine.convert(config)
+
+    assert freezes["count"] >= 4  # prepare, edges, palette_rgb, indexed
+    for key in ("prepare", "palette", "edges", "render"):
+        assert result.timings[key] < delay, key
