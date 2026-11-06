@@ -18,6 +18,7 @@ from converter.metrics import format_metrics  # noqa: E402
 from converter.types import ConversionResult, MetricResult  # noqa: E402
 from converter_gui.widgets.metrics_panel import (  # noqa: E402
     METRICS_TITLE,
+    OUTDATED_TEMPLATE,
     PLACEHOLDER_EMPTY,
     PLACEHOLDER_NO_METRICS,
     SUM_LABEL,
@@ -358,3 +359,65 @@ def test_the_result_is_never_modified(qtbot) -> None:
     assert timings == before_timings
     assert result.metrics is metrics
     assert result.timings == before_timings
+
+
+# --- outdated marker (T3.3) ---------------------------------------------
+
+
+def test_the_outdated_mark_is_hidden_by_default(qtbot) -> None:
+    panel = _panel(qtbot)
+
+    assert panel.outdated_generation is None
+    assert panel.outdated_label.isHidden() is True
+    assert panel.outdated_label.objectName() == "outdatedLabel"
+
+
+def test_set_outdated_marks_the_shown_numbers(qtbot) -> None:
+    """Old metrics stay readable, but they are labelled with the generation they belong to."""
+    panel = _panel(qtbot)
+    panel.set_result(_result(metrics=_metrics(), timings=FULL_TIMINGS))
+    report_before = panel.report_text()
+
+    panel.set_outdated(3)
+
+    assert panel.outdated_generation == 3
+    assert panel.outdated_label.isHidden() is False
+    assert panel.outdated_label.text() == OUTDATED_TEMPLATE.format(generation=3)
+    assert "3" in panel.outdated_label.toolTip()
+    assert panel.metrics_form.rowCount() == 7, "the numbers are still shown"
+    assert panel.report_text() == report_before, "the mark is not copied into the report"
+
+
+def test_set_outdated_none_clears_the_mark(qtbot) -> None:
+    panel = _panel(qtbot)
+    panel.set_result(_result(metrics=_metrics(), timings=FULL_TIMINGS))
+    panel.set_outdated(7)
+
+    panel.set_outdated(None)
+
+    assert panel.outdated_generation is None
+    assert panel.outdated_label.isHidden() is True
+
+
+def test_a_new_result_clears_the_outdated_mark(qtbot) -> None:
+    panel = _panel(qtbot)
+    panel.set_result(_result(metrics=_metrics(), timings=FULL_TIMINGS))
+    panel.set_outdated(2)
+
+    panel.set_result(_result(metrics=_metrics(mse=1.0), timings=FULL_TIMINGS))
+
+    assert panel.outdated_generation == 2, "the panel does not decide when a result is current"
+    panel.clear()
+    assert panel.outdated_generation is None, "clearing drops the numbers and their mark"
+
+
+def test_clear_removes_the_outdated_mark(qtbot) -> None:
+    panel = _panel(qtbot)
+    panel.set_result(_result(metrics=_metrics(), timings=FULL_TIMINGS))
+    panel.set_outdated(5)
+
+    panel.clear()
+
+    assert panel.outdated_label.isHidden() is True
+    assert panel.outdated_generation is None
+    assert panel.metric_values == {}

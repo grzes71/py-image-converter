@@ -35,6 +35,9 @@ PLACEHOLDER_EMPTY = "No conversion result yet."
 PLACEHOLDER_NO_METRICS = "Metrics were not computed for this result."
 PLACEHOLDER_NO_TIMINGS = "No stage timings recorded for this result."
 
+OUTDATED_TEMPLATE = "outdated (gen {generation})"
+"""Shown when the numbers belong to a generation the controller has already superseded."""
+
 #: The five stages of the engine contract, in display order. Unknown keys are appended after these, so a
 #: future stage shows up instead of being dropped.
 TIMING_KEYS: tuple[str, ...] = ("prepare", "palette", "edges", "render", "metrics")
@@ -90,6 +93,7 @@ class MetricsPanel(QWidget):
         self._result: ConversionResult | None = None
         self._metric_values: dict[str, str] = {}
         self._timing_values: dict[str, str] = {}
+        self._outdated_generation: int | None = None
         self._build_ui()
         self.clear()
 
@@ -108,6 +112,7 @@ class MetricsPanel(QWidget):
     def clear(self) -> None:
         """Return to the empty state: no result, no values, nothing to copy."""
         self._result = None
+        self.set_outdated(None)
         self._rebuild_metrics(None, placeholder=PLACEHOLDER_EMPTY)
         self._rebuild_timings(None)
         self.copy_button.setEnabled(False)
@@ -143,11 +148,36 @@ class MetricsPanel(QWidget):
         """The displayed stage timings (stage -> formatted value)."""
         return dict(self._timing_values)
 
+    @property
+    def outdated_generation(self) -> int | None:
+        """Generation the shown numbers belong to when they are outdated (``None`` if current)."""
+        return self._outdated_generation
+
+    def set_outdated(self, generation: int | None) -> None:
+        """Mark the shown numbers as belonging to an outdated generation (or clear the mark)."""
+        self._outdated_generation = generation
+        if generation is None:
+            self.outdated_label.hide()
+            return
+        self.outdated_label.setText(OUTDATED_TEMPLATE.format(generation=generation))
+        self.outdated_label.setToolTip(
+            f"These numbers come from generation {generation}, which no longer matches the settings"
+        )
+        self.outdated_label.show()
+
     # --- construction ---------------------------------------------------
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+
+        self.outdated_label = QLabel(self)
+        self.outdated_label.setObjectName("outdatedLabel")
+        self.outdated_label.setStyleSheet(
+            "background:#8a5a00; color:#ffffff; padding:2px 6px; border-radius:3px;"
+        )
+        self.outdated_label.hide()
+        layout.addWidget(self.outdated_label)
 
         metrics_group = QGroupBox(METRICS_TITLE, self)
         self.metrics_form = QFormLayout(metrics_group)

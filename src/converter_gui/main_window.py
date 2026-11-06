@@ -1,34 +1,27 @@
-"""Main window of the PySide6 GUI (T2.6).
+"""Main window of the PySide6 GUI.
 
-The window wires the existing components together: :class:`ParameterPanel` for the configuration,
-:class:`ImagePreview` for the synchronised source/result views and :class:`MetricsPanel` for the numbers.
-A single :class:`~converter.engine.ConversionEngine` owns the conversion, and the window keeps the
-two-piece state from plan §7.5 - ``latest_generation`` (the newest requested configuration or source) and
-``displayed`` (the last *successful* conversion with the configuration that produced it). Staleness is
-therefore a generation comparison, never a comparison of configurations.
-
-Conversion is synchronous for now (Phase 3 moves it to a worker); a wait cursor and a re-entrance guard
-keep the UI honest while it runs, and a failure never replaces the last good result.
+T2.6 built the window and T3.3 moved the conversion off the GUI thread: the window no longer owns an
+engine and never converts synchronously. It creates a :class:`QThreadBackend` and a
+:class:`ConversionController`, forwards user requests to the controller and renders the controller's
+state - the controller alone owns ``requested_config``, ``displayed``, the generation counter,
+``is_stale`` and ``is_updating`` (plan §7.1 and §7.5).
 """
 
 from __future__ import annotations
 
-import dataclasses
-import logging
-import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QDragEnterEvent, QDropEvent, QKeySequence
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QAction, QCloseEvent, QDragEnterEvent, QDropEvent, QKeySequence
 from PySide6.QtWidgets import (
-    QApplication,
     QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
+    QPushButton,
     QScrollArea,
     QSplitter,
     QVBoxLayout,
@@ -36,15 +29,20 @@ from PySide6.QtWidgets import (
 )
 
 import converter
-from converter.engine import ConversionEngine
 from converter.image_loader import SUPPORTED_EXTENSIONS
-from converter.types import ConversionConfig, ConversionResult
+from converter.types import ConversionConfig
+from converter_gui.controllers.conversion_controller import (
+    DEBOUNCE_INTERVAL_MS,
+    DEFAULT_SHUTDOWN_TIMEOUT_MS,
+    ConversionController,
+    DisplayedConversion,
+)
 from converter_gui.imaging import ndarray_to_qimage
 from converter_gui.widgets.image_preview import ZOOM_LEVELS, ImagePreview
 from converter_gui.widgets.metrics_panel import MetricsPanel
 from converter_gui.widgets.parameter_panel import ParameterPanel
-
-LOGGER = logging.getLogger(__name__)
+from converter_gui.workers.base import ConversionBackend
+from converter_gui.workers.conversion_worker import QThreadBackend
 
 WINDOW_TITLE = "PyImageConverter"
 INITIAL_SIZE = (1080, 720)
@@ -53,12 +51,14 @@ MINIMUM_SIZE = (760, 520)
 SOURCE_CAPTION = "Source (resized)"
 RESULT_CAPTION = "Atari result"
 NO_SOURCE_TEXT = "No image loaded - use File > Open or drop an image here"
+SHUTDOWN_TIMEOUT_MS = DEFAULT_SHUTDOWN_TIMEOUT_MS
 
 BADGE_OBJECT_NAME = "stateBadge"
 BADGE_STYLES = {
     "ready": "background:#1f6f3f; color:#ffffff; padding:2px 8px; border-radius:3px;",
     "stale": "background:#8a5a00; color:#ffffff; padding:2px 8px; border-radius:3px;",
     "updating": "background:#1f4e79; color:#ffffff; padding:2px 8px; border-radius:3px;",
+    "loading": "background:#1f4e79; color:#ffffff; padding:2px 8px; border-radius:3px;",
     "error": "background:#8a1f1f; color:#ffffff; padding:2px 8px; border-radius:3px;",
     "empty": "background:#4a4a4a; color:#ffffff; padding:2px 8px; border-radius:3px;",
 }
@@ -69,30 +69,51 @@ OPEN_FILTER = "Images ({})".format(
 
 
 @dataclass(frozen=True)
-class DisplayedConversion:
-    """What the views currently show: the result and the configuration that produced it (plan §7.5)."""
+class ExportPayload:
+    """Everything a future export dialog needs (T4.4).
 
-    generation: int
-    config: ConversionConfig
-    result: ConversionResult
-    timings: dict[str, float]
-    produced_at: float
-    elapsed: float
+    Two configurations travel together on purpose, because they answer different questions:
+
+    * ``displayed`` is the conversion on screen. Its ``config`` is the configuration that produced the
+      image, so it contains image-relevant settings only - export-only changes never trigger a
+      conversion and therefore never reach it.
+    * ``export_config`` is the user's current configuration, including the export-only fields
+      (``export_formats``, ``preview``, ``label_name``, ``atari_colors``). It may be newer than the
+      displayed result: the image is still valid, only the way it will be written has changed.
+    """
+
+    displayed: DisplayedConversion
+    export_config: ConversionConfig
 
 
 class MainWindow(QMainWindow):
-    """The application window: menus, toolbar, synchronised previews, parameters and metrics."""
+    """The application window: menus, toolbar, previews, parameters, metrics and the async controller."""
+
+    #: Emitted with an :class:`ExportPayload` when a current result may be exported (hook for T4.4).
+    export_requested = Signal(object)
 
     def __init__(
-        self, parent: QWidget | None = None, engine: ConversionEngine | None = None
+        self,
+        parent: QWidget | None = None,
+        *,
+        backend: ConversionBackend | None = None,
+        controller: ConversionController | None = None,
+        debounce_ms: int = DEBOUNCE_INTERVAL_MS,
     ) -> None:
         super().__init__(parent)
-        self.engine = engine if engine is not None else ConversionEngine()
-        self._latest_generation = 0
-        self._displayed: DisplayedConversion | None = None
+        if controller is None:
+            controller = ConversionController(
+                backend if backend is not None else QThreadBackend(),
+                debounce_ms=debounce_ms,
+                auto_update=True,
+            )
+        self._controller = controller
         self._source_path: Path | None = None
-        self._last_error: str | None = None
-        self._converting = False
+        self._pending_source_path: Path | None = None
+        self._loading_source = False
+        self._closing = False
+        self._shutdown_result: bool | None = None
+        self._banner_text = ""
 
         self.setWindowTitle(WINDOW_TITLE)
         self.resize(*INITIAL_SIZE)
@@ -104,42 +125,55 @@ class MainWindow(QMainWindow):
         self._build_menus()
         self._build_toolbar()
         self._build_status_bar()
-
-        self.parameter_panel.config_changed.connect(self._on_config_changed)
-        self._requested_config = self.parameter_panel.config()
-        self._update_state()
+        self._connect_controller()
+        self._refresh_state()
 
     # --- state exposed to tests and later tasks -------------------------
 
     @property
+    def controller(self) -> ConversionController:
+        """The controller that owns the conversion state."""
+        return self._controller
+
+    @property
+    def backend(self) -> ConversionBackend:
+        """The backend the controller drives (kept alive by the controller)."""
+        return self._controller.backend
+
+    @property
     def latest_generation(self) -> int:
-        """Generation of the newest source/configuration change."""
-        return self._latest_generation
+        """Generation of the newest source or image-relevant configuration change."""
+        return self._controller.latest_generation
 
     @property
     def displayed(self) -> DisplayedConversion | None:
-        """The last successful conversion (``None`` before the first one)."""
-        return self._displayed
+        """The last successful conversion shown in the window."""
+        return self._controller.displayed
 
     @property
     def requested_config(self) -> ConversionConfig:
-        """The configuration the panel currently represents."""
-        return self._requested_config
+        """The configuration the parameter panel currently represents."""
+        return self._controller.requested_config
 
     @property
     def source_path(self) -> Path | None:
-        """The image currently loaded into the engine."""
+        """Path of the source that was last loaded successfully."""
         return self._source_path
 
     @property
     def last_error(self) -> str | None:
-        """The message of the most recent failed conversion, if any."""
-        return self._last_error
+        """Message of the most recent failed load or conversion."""
+        return self._controller.last_error
 
     @property
     def is_stale(self) -> bool:
         """True when the displayed result does not belong to the newest generation."""
-        return self._displayed is None or self._displayed.generation != self._latest_generation
+        return self._controller.is_stale
+
+    @property
+    def is_updating(self) -> bool:
+        """True while the controller is converting."""
+        return self._controller.is_updating
 
     # --- actions, menus and toolbar -------------------------------------
 
@@ -156,9 +190,15 @@ class MainWindow(QMainWindow):
 
         self.convert_action = QAction("&Convert", self)
         self.convert_action.setShortcut(QKeySequence("Ctrl+Return"))
-        self.convert_action.setStatusTip("Convert the image with the current parameters")
+        self.convert_action.setStatusTip("Convert now with the current parameters")
         self.convert_action.setEnabled(False)
-        self.convert_action.triggered.connect(self.convert)
+        self.convert_action.triggered.connect(self.convert_now)
+
+        self.auto_update_action = QAction("&Auto-update", self)
+        self.auto_update_action.setCheckable(True)
+        self.auto_update_action.setChecked(self._controller.auto_update)
+        self.auto_update_action.setStatusTip("Convert automatically after a parameter change")
+        self.auto_update_action.toggled.connect(self._controller.set_auto_update)
 
         self.about_action = QAction("&About PyImageConverter", self)
         self.about_action.setStatusTip("Show the version and a short description")
@@ -186,8 +226,11 @@ class MainWindow(QMainWindow):
 
         edit_menu = self.menuBar().addMenu("&Edit")
         edit_menu.addAction(self.convert_action)
+        edit_menu.addAction(self.auto_update_action)
 
         view_menu = self.menuBar().addMenu("&View")
+        view_menu.addAction(self.auto_update_action)
+        view_menu.addSeparator()
         for action in self.zoom_actions.values():
             view_menu.addAction(action)
         view_menu.addAction(self.fit_action)
@@ -201,6 +244,7 @@ class MainWindow(QMainWindow):
         toolbar.setMovable(False)
         toolbar.addAction(self.open_action)
         toolbar.addAction(self.convert_action)
+        toolbar.addAction(self.auto_update_action)
         toolbar.addSeparator()
         for action in self.zoom_actions.values():
             toolbar.addAction(action)
@@ -233,6 +277,7 @@ class MainWindow(QMainWindow):
         preview_layout = QVBoxLayout(preview_column)
         preview_layout.setContentsMargins(0, 0, 0, 0)
         preview_layout.addWidget(header)
+        preview_layout.addWidget(self._build_error_banner())
         preview_layout.addWidget(captions)
         preview_layout.addWidget(self.preview, 1)
 
@@ -257,13 +302,45 @@ class MainWindow(QMainWindow):
         splitter.setSizes([700, 380])
         self.setCentralWidget(splitter)
 
+    def _build_error_banner(self) -> QWidget:
+        """A non-modal, dismissible line above the preview (plan §7.6)."""
+        self.error_banner = QFrame(self)
+        self.error_banner.setObjectName("errorBanner")
+        self.error_banner.setStyleSheet("background:#5a1f1f; color:#ffffff; border-radius:3px;")
+        row = QHBoxLayout(self.error_banner)
+        row.setContentsMargins(8, 4, 8, 4)
+        self.error_label = QLabel(self.error_banner)
+        self.error_label.setWordWrap(True)
+        self.error_details_button = QPushButton("Details", self.error_banner)
+        self.error_details_button.setToolTip("Show the full error message")
+        self.error_details_button.clicked.connect(self.show_error_details)
+        self.error_dismiss_button = QPushButton("Dismiss", self.error_banner)
+        self.error_dismiss_button.clicked.connect(self.hide_error_banner)
+        row.addWidget(self.error_label, 1)
+        row.addWidget(self.error_details_button)
+        row.addWidget(self.error_dismiss_button)
+        self.error_banner.hide()
+        return self.error_banner
+
     def _build_status_bar(self) -> None:
         self.statusBar().showMessage(NO_SOURCE_TEXT)
 
-    # --- opening images -------------------------------------------------
+    def _connect_controller(self) -> None:
+        """Wire the controller's signals; the parameter panel feeds the controller directly."""
+        controller = self._controller
+        controller.result_ready.connect(self._on_result_ready)
+        controller.source_loaded.connect(self._on_source_loaded)
+        controller.source_failed.connect(self._on_source_failed)
+        controller.conversion_failed.connect(self._on_conversion_failed)
+        controller.conversion_cancelled.connect(self._on_conversion_cancelled)
+        controller.export_requested.connect(self._on_export_requested)
+        controller.state_changed.connect(self._refresh_state)
+        self.parameter_panel.config_changed.connect(controller.set_config)
+
+    # --- user requests --------------------------------------------------
 
     def open_dialog(self) -> None:
-        """Ask for a path and load it; cancelling the dialog changes nothing."""
+        """Ask for a path and hand it to the controller; cancelling changes nothing."""
         start = str(self._source_path.parent) if self._source_path is not None else ""
         path, _ = QFileDialog.getOpenFileName(self, "Open image", start, OPEN_FILTER)
         if not path:
@@ -271,11 +348,9 @@ class MainWindow(QMainWindow):
         self.open_image(path)
 
     def open_image(self, path: str | Path) -> bool:
-        """Load ``path`` into the engine; returns ``True`` when the source changed.
-
-        The previous preview is deliberately kept (it simply becomes stale), so a failed or cancelled
-        open never leaves an empty window.
-        """
+        """Ask the controller to load ``path``; returns ``False`` only for a refused request."""
+        if self._closing:
+            return False
         candidate = Path(path)
         if candidate.suffix.lower() not in SUPPORTED_EXTENSIONS:
             self._report_error(
@@ -284,26 +359,23 @@ class MainWindow(QMainWindow):
                 details=f"Supported extensions: {', '.join(sorted(SUPPORTED_EXTENSIONS))}",
             )
             return False
-        try:
-            self.engine.set_source(candidate)
-        except Exception as exc:
-            LOGGER.exception("Could not load %s", candidate)
-            self._report_error(
-                "Could not open image",
-                f"{candidate.name} could not be loaded: {exc}",
-                details=repr(exc),
-            )
-            return False
-
-        self._source_path = candidate
-        self._latest_generation += 1
-        self._last_error = None
-        self.convert_action.setEnabled(True)
-        for action in self.zoom_actions.values():
-            action.setEnabled(True)
-        self.fit_action.setEnabled(True)
-        self._update_state()
+        self._pending_source_path = candidate
+        self._loading_source = True
+        self._controller.set_source(candidate)
+        self._refresh_state()
         return True
+
+    def convert_now(self) -> None:
+        """Forward Convert to the controller; the GUI thread never converts anything."""
+        if self._closing:
+            return
+        self._controller.convert_now()
+
+    def request_export(self) -> bool:
+        """Ask for an export; the controller decides whether the result is current enough."""
+        if self._closing:
+            return False
+        return self._controller.request_export()
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         if self._first_supported_path(event) is not None:
@@ -330,128 +402,160 @@ class MainWindow(QMainWindow):
                 return candidate
         return None
 
-    # --- configuration and conversion -----------------------------------
+    # --- controller signals ---------------------------------------------
 
-    def _on_config_changed(self, config: ConversionConfig) -> None:
-        """A parameter edit makes the shown result stale; it never converts on its own (yet)."""
-        self._requested_config = dataclasses.replace(config)
-        self._latest_generation += 1
-        self._update_state()
-
-    def convert(self) -> bool:
-        """Convert synchronously with the current parameters.
-
-        Returns ``True`` when a new result was displayed. On failure the previous result, preview and
-        metrics stay exactly as they were and the error is reported.
-        """
-        if self._source_path is None or self._converting:
-            return False
-
-        self._converting = True
-        self.convert_action.setEnabled(False)
-        self._update_state()  # "updating…" before the blocking call
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        started = time.perf_counter()
-        result: ConversionResult | None = None
-        failure: Exception | None = None
-        try:
-            result = self.engine.convert(self._requested_config, compute_metrics=True)
-        except Exception as exc:
-            LOGGER.exception("Conversion failed")
-            failure = exc
-        finally:
-            QApplication.restoreOverrideCursor()
-            self._converting = False
-            self.convert_action.setEnabled(self._source_path is not None)
-
-        if failure is not None:
-            self._last_error = str(failure) or type(failure).__name__
-            self._update_state()
-            self._report_error(
-                "Conversion failed",
-                f"The image could not be converted: {self._last_error}",
-                details=repr(failure),
-            )
-            return False
-
-        assert result is not None, "no failure and no result: the engine returned nothing"
-        self._show_result(result, time.perf_counter() - started)
-        return True
-
-    def _show_result(self, result: ConversionResult, elapsed: float) -> None:
-        """Display a fresh result: both previews, the metrics and the palette swatch."""
-        source_image = ndarray_to_qimage(result.source_resized)
-        converted_image = ndarray_to_qimage(result.converted_rgb)
-        self.preview.set_image_pair(source_image, converted_image)
+    def _on_result_ready(self, displayed: DisplayedConversion) -> None:
+        if self._closing:
+            return
+        result = displayed.result
+        self.preview.set_image_pair(
+            ndarray_to_qimage(result.source_resized),
+            ndarray_to_qimage(result.converted_rgb),
+        )
         self.metrics_panel.set_result(result)
         self.parameter_panel.set_palette_colors(
             [tuple(int(channel) for channel in colour) for colour in result.palette_rgb]
         )
-        self._displayed = DisplayedConversion(
-            generation=self._latest_generation,
-            config=dataclasses.replace(self._requested_config),
-            result=result,
-            timings=dict(result.timings),
-            produced_at=time.perf_counter(),
-            elapsed=elapsed,
+        self.hide_error_banner()
+        self._refresh_state()
+
+    def _on_source_loaded(self, generation: int, identity: object) -> None:
+        if self._closing:
+            return
+        self._loading_source = False
+        if self._pending_source_path is not None:
+            self._source_path = self._pending_source_path
+            self._pending_source_path = None
+        self._refresh_state()
+
+    def _on_source_failed(self, generation: int, message: str) -> None:
+        if self._closing:
+            return
+        self._loading_source = False
+        self._pending_source_path = None
+        self._show_error_banner("The image could not be loaded", message)
+        self._refresh_state()
+
+    def _on_conversion_failed(self, generation: int, message: str) -> None:
+        if self._closing:
+            return
+        self._show_error_banner("The conversion failed", message)
+        self._refresh_state()
+
+    def _on_conversion_cancelled(self, generation: int) -> None:
+        if self._closing:
+            return
+        self._refresh_state()  # a cancellation is not an error and shows no banner
+
+    def _on_export_requested(self, displayed: DisplayedConversion) -> None:
+        if self._closing:
+            return
+        payload = ExportPayload(
+            displayed=displayed,
+            export_config=self._controller.requested_config,
         )
-        self._last_error = None
-        self._update_state()
+        self.export_requested.emit(payload)
 
-    # --- state rendering ------------------------------------------------
+    # --- rendering ------------------------------------------------------
 
-    def _update_state(self) -> None:
-        state, badge, status = self._state_snapshot()
+    def _refresh_state(self) -> None:
+        """Render the controller's state and the window's own loading flag."""
+        style, badge = self._badge()
         self.state_badge.setText(badge)
-        self.state_badge.setStyleSheet(BADGE_STYLES[state])
-        self.state_badge.setToolTip(status)
+        self.state_badge.setStyleSheet(BADGE_STYLES[style])
         self.file_label.setText(self._file_text())
-        self.statusBar().showMessage(status)
+        self.statusBar().showMessage(self._status_text())
+        self._update_actions()
+        self._update_metrics_outdated()
 
-    def _state_snapshot(self) -> tuple[str, str, str]:
-        """Return ``(style_key, badge_text, status_text)`` for the current state (§7.5)."""
-        if self._source_path is None:
-            return "empty", "no image", NO_SOURCE_TEXT
-        name = self._source_path.name
-        if self._converting:
-            text = f"{name} - converting… (gen {self._latest_generation})"
-            return "updating", f"updating… (gen {self._latest_generation})", text
-        displayed = self._displayed
-        if self._last_error is not None:
-            if displayed is None:
-                text = f"{name} - error: {self._last_error} (no previous result)"
-            else:
-                text = (
-                    f"{name} - error: {self._last_error} - still showing gen {displayed.generation}"
-                    " (outdated)"
-                )
-            return "error", f"error - showing gen {displayed.generation}", text
-        if displayed is None or displayed.generation != self._latest_generation:
-            shown = "nothing yet" if displayed is None else f"gen {displayed.generation}"
-            text = (
-                f"{name} - stale, showing {shown}; press Convert for gen {self._latest_generation}"
+    def _badge(self) -> tuple[str, str]:
+        controller = self._controller
+        if self._loading_source:
+            name = self._pending_source_path.name if self._pending_source_path else "source"
+            return "loading", f"loading {name}…"
+        if self._closing:
+            return "updating", controller.status_text()
+        if self._source_path is None and controller.displayed is None:
+            return "empty", "no image"
+        if controller.last_error is not None and not controller.is_updating:
+            return "error", controller.status_text()
+        if controller.is_updating:
+            return "updating", controller.status_text()
+        if controller.displayed is None:
+            return "stale", controller.status_text()
+        return ("stale" if controller.is_stale else "ready"), controller.status_text()
+
+    def _status_text(self) -> str:
+        controller = self._controller
+        if self._source_path is None and not self._loading_source:
+            return NO_SOURCE_TEXT
+        parts = [self._file_text(), controller.status_text()]
+        displayed = controller.displayed
+        if displayed is not None:
+            total = sum(
+                float(value)
+                for value in displayed.timings.values()
+                if isinstance(value, (int, float))
             )
-            return "stale", f"stale - showing {shown}", text
-        width, height = displayed.result.indexed.shape[1], displayed.result.indexed.shape[0]
-        text = (
-            f"{name} - {width}×{height} - ready (gen {displayed.generation})"
-            f" - {displayed.elapsed * 1000:.0f} ms"
-        )
-        return "ready", f"ready (gen {displayed.generation})", text
+            parts.append(f"stages {total * 1000:.1f} ms")
+        return " - ".join(parts)
 
     def _file_text(self) -> str:
-        if self._source_path is None:
-            return NO_SOURCE_TEXT
-        source = self.engine.source
-        if source is None:
+        if self._source_path is not None:
             return self._source_path.name
-        height, width = source.shape[0], source.shape[1]
-        return f"{self._source_path.name} - source {width}×{height}"
+        if self._pending_source_path is not None:
+            return f"{self._pending_source_path.name} (loading)"
+        return NO_SOURCE_TEXT
 
-    # --- dialogs --------------------------------------------------------
+    def _update_actions(self) -> None:
+        controller = self._controller
+        has_source = controller.source_identity is not None
+        self.convert_action.setEnabled(
+            has_source and not controller.is_updating and not self._closing
+        )
+        has_result = controller.displayed is not None
+        for action in self.zoom_actions.values():
+            action.setEnabled(has_result)
+        self.fit_action.setEnabled(has_result)
+        if self.auto_update_action.isChecked() != controller.auto_update:
+            self.auto_update_action.setChecked(controller.auto_update)
+
+    def _update_metrics_outdated(self) -> None:
+        displayed = self._controller.displayed
+        if displayed is None or not self._controller.is_stale:
+            self.metrics_panel.set_outdated(None)
+        else:
+            self.metrics_panel.set_outdated(displayed.generation)
+
+    # --- error banner ---------------------------------------------------
+
+    def _show_error_banner(self, title: str, message: str) -> None:
+        """Non-modal error line: the preview and the metrics stay usable (plan §7.6)."""
+        self._banner_text = f"{title}: {message}"
+        self.error_label.setText(self._banner_text)
+        self.error_banner.show()
+
+    def hide_error_banner(self) -> None:
+        """Hide the banner and forget its message (also called on every new result)."""
+        self.error_banner.hide()
+        self.error_label.setText("")
+        self._banner_text = ""
+
+    def show_error_details(self) -> None:
+        """Details on demand - the banner itself only shows one line."""
+        if not self._banner_text:
+            return
+        box = QMessageBox(
+            QMessageBox.Icon.Warning,
+            "Error details",
+            self._banner_text,
+            QMessageBox.StandardButton.Close,
+            self,
+        )
+        box.exec()
 
     def _report_error(self, title: str, message: str, *, details: str | None = None) -> None:
-        """Show a modal error box (tests replace this method to stay headless)."""
+        """Modal box for exceptional situations (unsupported file, shutdown timeout)."""
         box = QMessageBox(
             QMessageBox.Icon.Critical,
             title,
@@ -462,6 +566,34 @@ class MainWindow(QMainWindow):
         if details:
             box.setDetailedText(details)
         box.exec()
+
+    # --- shutdown -------------------------------------------------------
+
+    def shutdown(self, timeout_ms: int = SHUTDOWN_TIMEOUT_MS) -> bool:
+        """Stop the controller and its backend; returns whether they really stopped."""
+        if self._shutdown_result is True:
+            return True
+        self._closing = True
+        self._loading_source = False
+        stopped = self._controller.shutdown(timeout_ms)
+        self._shutdown_result = stopped
+        self._refresh_state()
+        return stopped
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        """Never destroy a worker that is still running: on a timeout the window stays open."""
+        if self.shutdown():
+            event.accept()
+            return
+        event.ignore()
+        self._warn_shutdown_timeout()
+
+    def _warn_shutdown_timeout(self) -> None:
+        self._report_error(
+            "Still closing",
+            "The conversion worker is still running and did not stop in time. "
+            "Close the window again to retry.",
+        )
 
     def show_about(self) -> None:
         """About box with the real package version."""
