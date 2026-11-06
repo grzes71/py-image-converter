@@ -96,8 +96,14 @@ def export_result(
     result: ConversionResult,
     output_path: str | Path,
     config: ConversionConfig,
+    *,
+    antic_mode: str | None = None,
 ) -> list[Path]:
-    """Export conversion result to requested formats."""
+    """Export conversion result to requested formats.
+
+    ``antic_mode`` is forwarded to the XEX exporter only (``None`` keeps the shape-based inference);
+    the other formats ignore it.
+    """
     output_path = Path(output_path)
     stem = output_path.stem
     parent = output_path.parent
@@ -134,6 +140,7 @@ def export_result(
             export_xex(
                 result.indexed, p,
                 palette_indices=result.palette_indices,
+                antic_mode=antic_mode,
                 atari_colors=config.atari_colors,
             )
             exported.append(p)
