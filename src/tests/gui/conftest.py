@@ -12,4 +12,25 @@ from __future__ import annotations
 
 import os
 
+import pytest
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+
+@pytest.fixture(autouse=True)
+def _stop_the_workers():
+    """Shut every ``MainWindow`` a test built, so no ``QThread`` outlives its test.
+
+    The import is late and forgiving on purpose: this module has to stay importable - and usable by the
+    Qt-free protocol tests - when PySide6 is missing.
+    """
+    yield
+    try:
+        from gui_fakes import CREATED
+    except ImportError:  # no Qt: no window can exist
+        return
+
+    while CREATED:
+        window = CREATED.pop()
+        if window._shutdown_result is not True:
+            window.shutdown(50)

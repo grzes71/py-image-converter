@@ -4,24 +4,23 @@ The window is exercised through the real :class:`ConversionController` on top of
 wiring, the generation bookkeeping and the rendering are all covered without threads; the fake answers
 only when a test says so, which keeps the assertions free of timing assumptions. One integration test
 runs the whole stack - window, controller, ``QThreadBackend`` and the real engine - on a fixture image.
-Skipped when PySide6 is missing (see ``conftest.py``).
+The display rules of plan §7.5/§7.6 (stale guard, export gate, failure handling) live in
+``test_stale_guard.py``. Skipped when PySide6 is missing (see ``conftest.py``).
 """
 
 from __future__ import annotations
 
-import dataclasses
 import os
 import runpy
 import subprocess
 import sys
 from pathlib import Path
 
-import numpy as np
 import pytest
 
 pytest.importorskip("PySide6", reason="PySide6 is not installed (install the 'gui' extra)")
 
-from PySide6.QtCore import QMimeData, QObject, QPointF, Qt, QUrl, Signal  # noqa: E402
+from PySide6.QtCore import QMimeData, QPointF, Qt, QUrl  # noqa: E402
 from PySide6.QtGui import QDragEnterEvent, QDropEvent, QKeySequence  # noqa: E402
 from PySide6.QtWidgets import (  # noqa: E402
     QApplication,
@@ -36,13 +35,6 @@ from PySide6.QtWidgets import (  # noqa: E402
 import converter  # noqa: E402
 import converter_gui  # noqa: E402
 import converter_gui.app  # noqa: E402
-from converter.types import (  # noqa: E402
-    ConversionConfig,
-    ConversionResult,
-    ExportFormat,
-    MetricResult,
-    SourceIdentity,
-)
 from converter_gui.controllers.conversion_controller import (  # noqa: E402
     ConversionController,
     DisplayedConversion,
@@ -54,179 +46,27 @@ from converter_gui.main_window import (  # noqa: E402
     RESULT_CAPTION,
     SHUTDOWN_TIMEOUT_MS,
     SOURCE_CAPTION,
-    ExportPayload,
     MainWindow,
 )
 from converter_gui.widgets.image_preview import ImagePreview  # noqa: E402
 from converter_gui.widgets.metrics_panel import MetricsPanel  # noqa: E402
 from converter_gui.widgets.parameter_panel import ParameterPanel  # noqa: E402
 
+from gui_fakes import (  # noqa: E402
+    CREATED,
+    DEBOUNCE_MS,
+    FIXTURES,
+    REFERENCE_IMAGE,
+    FakeBackend,
+    build_window,
+    converted_window,
+    make_result,
+    open_window,
+)
+
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SRC = REPO_ROOT / "src"
-FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
-REFERENCE_IMAGE = FIXTURES / "reference.png"
-
-DEBOUNCE_MS = 5
-"""Short on purpose: the window accepts a debounce override, the production default stays 300 ms."""
-
-CREATED: list[MainWindow] = []
-"""Every window built by a test; the fixture below never leaves a running worker behind."""
-
-
-@pytest.fixture(autouse=True)
-def _always_stop_the_workers():
-    """Shut every window down, so no test can leak a ``QThread`` into the next one."""
-    yield
-    while CREATED:
-        window = CREATED.pop()
-        if window._shutdown_result is not True:
-            window.shutdown(50)
-
-
-def _metrics() -> MetricResult:
-    return MetricResult(
-        mse=12.5,
-        psnr=27.25,
-        ssim=0.9375,
-        mean_rgb_error=5.0,
-        mean_luminance_error=4.25,
-        colors_used=4,
-        histogram_coverage=0.625,
-    )
-
-
-def _palette(count: int = 4) -> np.ndarray:
-    colours = [(10, 20, 30), (40, 50, 60), (70, 80, 90), (1, 2, 3)]
-    return np.array(colours[:count], dtype=np.uint8).reshape(count, 3)
-
-
-def _result(colors: int = 4, height: int = 8, width: int = 10) -> ConversionResult:
-    """A tiny but complete result: two RGB images, a palette, metrics and stage timings."""
-    return ConversionResult(
-        indexed=np.zeros((height, width), dtype=np.uint8),
-        palette_indices=list(range(colors)),
-        palette_rgb=_palette(colors),
-        source_resized=np.zeros((height, width, 3), dtype=np.uint8),
-        metrics=_metrics(),
-        timings={
-            "prepare": 0.010,
-            "palette": 0.002,
-            "edges": 0.001,
-            "render": 0.100,
-            "metrics": 0.002,
-        },
-    )
-
-
-class FakeBackend(QObject):
-    """A backend that records requests and answers only when the test asks it to."""
-
-    source_loaded = Signal(int, object)
-    finished = Signal(int, object)
-    failed = Signal(int, str)
-    cancelled = Signal(int)
-
-    def __init__(
-        self, *, auto_load: bool = True, auto_convert: bool = False, shutdown_result: bool = True
-    ) -> None:
-        super().__init__()
-        self.calls: list[tuple] = []
-        self.auto_load = auto_load
-        self.auto_convert = auto_convert
-        self.shutdown_result = shutdown_result
-        self.fail_loads = False
-        self.running: int | None = None
-
-    # --- the ConversionBackend protocol --------------------------------
-
-    def load_source(self, gen: int, path: str, verify_content: bool = False) -> None:
-        self.calls.append(("load", gen, str(path), verify_content))
-        if not self.auto_load:
-            return
-        if self.fail_loads:
-            self.failed.emit(gen, "unreadable image")
-            return
-        self.source_loaded.emit(gen, SourceIdentity(path=str(path), size=3, mtime_ns=4))
-
-    def convert(self, gen: int, config: ConversionConfig) -> None:
-        self.calls.append(("convert", gen, config))
-        self.running = gen
-        if self.auto_convert:
-            self.finish()
-
-    def cancel(self, gen: int) -> None:
-        self.calls.append(("cancel", gen))
-
-    def shutdown(self, timeout_ms: int) -> bool:
-        self.calls.append(("shutdown", timeout_ms))
-        if self.shutdown_result:
-            self.running = None
-        return self.shutdown_result
-
-    # --- test controls -------------------------------------------------
-
-    def kinds(self) -> list[str]:
-        """The recorded request kinds, in order."""
-        return [call[0] for call in self.calls]
-
-    def conversions(self) -> list[int]:
-        """Generations of the recorded conversions."""
-        return [call[1] for call in self.calls if call[0] == "convert"]
-
-    def finish(self, result: ConversionResult | None = None) -> None:
-        gen, self.running = self.running, None
-        assert gen is not None, "no conversion is running"
-        self.finished.emit(gen, result if result is not None else _result())
-
-    def fail(self, message: str = "boom") -> None:
-        gen, self.running = self.running, None
-        assert gen is not None, "no conversion is running"
-        self.failed.emit(gen, message)
-
-    def emit_cancelled(self) -> None:
-        gen, self.running = self.running, None
-        assert gen is not None, "no conversion is running"
-        self.cancelled.emit(gen)
-
-    def finish_late(self, gen: int, result: ConversionResult) -> None:
-        """Answer for a generation the controller has already superseded."""
-        self.finished.emit(gen, result)
-
-    def fail_late(self, gen: int, message: str) -> None:
-        self.failed.emit(gen, message)
-
-
-def _window(
-    qtbot, backend: FakeBackend | None = None, **kwargs
-) -> tuple[MainWindow, FakeBackend, list[tuple[str, str]]]:
-    """A window plus its fake backend and the modal boxes it would have opened."""
-    fake = FakeBackend() if backend is None else backend
-    kwargs.setdefault("debounce_ms", DEBOUNCE_MS)
-    window = MainWindow(backend=fake, **kwargs)
-    qtbot.addWidget(window)
-    CREATED.append(window)
-    boxes: list[tuple[str, str]] = []
-    window._report_error = lambda title, message, **rest: boxes.append((title, message))
-    window._warn_shutdown_timeout = lambda: boxes.append(("Still closing", ""))
-    return window, fake, boxes
-
-
-def _open(
-    qtbot, path: Path = REFERENCE_IMAGE
-) -> tuple[MainWindow, FakeBackend, list[tuple[str, str]]]:
-    """A window with ``path`` handed to the controller (and, by default, one conversion running)."""
-    window, backend, boxes = _window(qtbot)
-    assert window.open_image(path) is True
-    return window, backend, boxes
-
-
-def _converted(
-    qtbot, path: Path = REFERENCE_IMAGE
-) -> tuple[MainWindow, FakeBackend, list[tuple[str, str]]]:
-    """A window with one finished conversion of ``path`` on screen."""
-    window, backend, boxes = _open(qtbot, path)
-    backend.finish()
-    return window, backend, boxes
 
 
 def _drop_event(path: Path) -> tuple[QDropEvent, QMimeData]:
@@ -261,7 +101,7 @@ def _drag_enter_event(path: Path) -> tuple[QDragEnterEvent, QMimeData]:
 
 def test_starts(qtbot) -> None:
     """The window can be created, registered, shown and is really visible."""
-    window, _, _ = _window(qtbot)
+    window, _, _ = build_window(qtbot)
 
     window.show()
 
@@ -272,7 +112,7 @@ def test_starts(qtbot) -> None:
 
 
 def test_the_window_contains_the_components(qtbot) -> None:
-    window, backend, _ = _window(qtbot)
+    window, backend, _ = build_window(qtbot)
 
     assert isinstance(window.preview, ImagePreview)
     assert isinstance(window.parameter_panel, ParameterPanel)
@@ -289,7 +129,7 @@ def test_the_window_contains_the_components(qtbot) -> None:
 
 def test_the_window_owns_a_controller_on_top_of_the_backend(qtbot) -> None:
     """One backend, one controller - and the window is not an engine host any more."""
-    window, backend, _ = _window(qtbot)
+    window, backend, _ = build_window(qtbot)
 
     assert isinstance(window.controller, ConversionController)
     assert window.controller.backend is backend
@@ -300,7 +140,7 @@ def test_the_window_owns_a_controller_on_top_of_the_backend(qtbot) -> None:
 
 
 def test_the_menus_and_the_toolbar_expose_the_actions(qtbot) -> None:
-    window, _, _ = _window(qtbot)
+    window, _, _ = build_window(qtbot)
 
     menus = {menu.title().replace("&", ""): menu for menu in window.menuBar().findChildren(QMenu)}
     toolbar = window.findChild(QToolBar, "mainToolBar")
@@ -332,7 +172,7 @@ def test_the_menus_and_the_toolbar_expose_the_actions(qtbot) -> None:
 
 
 def test_the_previews_are_labelled(qtbot) -> None:
-    window, _, _ = _window(qtbot)
+    window, _, _ = build_window(qtbot)
 
     captions = [
         label.text()
@@ -348,7 +188,7 @@ def test_the_previews_are_labelled(qtbot) -> None:
 
 def test_opening_an_image_is_delegated_to_the_controller(qtbot) -> None:
     """The window asks the controller; the load itself never happens on the GUI thread."""
-    window, backend, boxes = _window(qtbot, FakeBackend(auto_load=False))
+    window, backend, boxes = build_window(qtbot, FakeBackend(auto_load=False))
 
     assert window.open_image(REFERENCE_IMAGE) is True
 
@@ -362,7 +202,7 @@ def test_opening_an_image_is_delegated_to_the_controller(qtbot) -> None:
 
 
 def test_a_loaded_source_is_recorded_and_converted(qtbot) -> None:
-    window, backend, boxes = _window(qtbot)
+    window, backend, boxes = build_window(qtbot)
 
     window.open_image(REFERENCE_IMAGE)
 
@@ -379,7 +219,7 @@ def test_a_loaded_source_is_recorded_and_converted(qtbot) -> None:
 
 def test_a_failed_load_changes_nothing_and_shows_the_banner(qtbot) -> None:
     """A source that cannot be read keeps the previous one and never becomes the current one."""
-    window, backend, _ = _converted(qtbot)
+    window, backend, _ = converted_window(qtbot)
     views_before = [view.pixmap_item.pixmap().cacheKey() for view in window.preview.views]
     backend.fail_loads = True
     broken = FIXTURES / "does-not-exist.png"
@@ -397,7 +237,7 @@ def test_a_failed_load_changes_nothing_and_shows_the_banner(qtbot) -> None:
 
 
 def test_the_dialog_filter_uses_the_supported_extensions(qtbot, monkeypatch) -> None:
-    window, _, _ = _window(qtbot)
+    window, _, _ = build_window(qtbot)
     seen: dict[str, str] = {}
 
     def fake_dialog(parent, title, directory, filters):
@@ -415,7 +255,7 @@ def test_the_dialog_filter_uses_the_supported_extensions(qtbot, monkeypatch) -> 
 
 
 def test_cancelling_the_open_dialog_changes_nothing(qtbot, monkeypatch) -> None:
-    window, backend, _ = _window(qtbot)
+    window, backend, _ = build_window(qtbot)
     monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *args: ("", ""))
     before = (window.latest_generation, window.displayed, window.source_path)
 
@@ -427,7 +267,7 @@ def test_cancelling_the_open_dialog_changes_nothing(qtbot, monkeypatch) -> None:
 
 
 def test_an_unsupported_extension_is_refused(qtbot, tmp_path: Path) -> None:
-    window, backend, boxes = _window(qtbot)
+    window, backend, boxes = build_window(qtbot)
     bogus = tmp_path / "notes.txt"
     bogus.write_text("not an image", encoding="utf-8")
 
@@ -441,7 +281,7 @@ def test_an_unsupported_extension_is_refused(qtbot, tmp_path: Path) -> None:
 
 
 def test_drag_and_drop_opens_a_supported_file(qtbot) -> None:
-    window, _, _ = _window(qtbot)
+    window, _, _ = build_window(qtbot)
     event, _mime = _drop_event(REFERENCE_IMAGE)
 
     window.dropEvent(event)
@@ -451,7 +291,7 @@ def test_drag_and_drop_opens_a_supported_file(qtbot) -> None:
 
 
 def test_drag_and_drop_ignores_other_files(qtbot, tmp_path: Path) -> None:
-    window, backend, _ = _window(qtbot)
+    window, backend, _ = build_window(qtbot)
     event, _mime = _drop_event(tmp_path / "notes.txt")
 
     window.dropEvent(event)
@@ -462,7 +302,7 @@ def test_drag_and_drop_ignores_other_files(qtbot, tmp_path: Path) -> None:
 
 
 def test_drag_enter_accepts_only_supported_files(qtbot, tmp_path: Path) -> None:
-    window, _, _ = _window(qtbot)
+    window, _, _ = build_window(qtbot)
     accepted, accepted_mime = _drag_enter_event(REFERENCE_IMAGE)
     rejected, rejected_mime = _drag_enter_event(tmp_path / "notes.txt")
 
@@ -479,7 +319,7 @@ def test_drag_enter_accepts_only_supported_files(qtbot, tmp_path: Path) -> None:
 
 def test_a_parameter_change_is_forwarded_to_the_controller(qtbot) -> None:
     """The panel feeds the controller directly; the window adds no comparison and no timer."""
-    window, backend, _ = _converted(qtbot)
+    window, backend, _ = converted_window(qtbot)
     conversions_before = backend.conversions()
 
     window.parameter_panel.colors_spin.setValue(2)
@@ -493,7 +333,7 @@ def test_a_parameter_change_is_forwarded_to_the_controller(qtbot) -> None:
 
 
 def test_auto_update_off_keeps_parameter_changes_from_converting(qtbot) -> None:
-    window, backend, _ = _converted(qtbot)
+    window, backend, _ = converted_window(qtbot)
     conversions_before = backend.conversions()
 
     window.auto_update_action.setChecked(False)
@@ -508,7 +348,7 @@ def test_auto_update_off_keeps_parameter_changes_from_converting(qtbot) -> None:
 
 
 def test_auto_update_comes_back_on(qtbot) -> None:
-    window, backend, _ = _converted(qtbot)
+    window, backend, _ = converted_window(qtbot)
     window.auto_update_action.setChecked(False)
 
     window.auto_update_action.setChecked(True)
@@ -521,7 +361,7 @@ def test_auto_update_comes_back_on(qtbot) -> None:
 
 def test_the_toggle_follows_the_controller(qtbot) -> None:
     """The action is a view of ``controller.auto_update``, not a second source of truth."""
-    window, _, _ = _window(qtbot)
+    window, _, _ = build_window(qtbot)
 
     window.controller.set_auto_update(False)
 
@@ -529,7 +369,7 @@ def test_the_toggle_follows_the_controller(qtbot) -> None:
 
 
 def test_manual_convert_uses_convert_now(qtbot) -> None:
-    window, backend, _ = _converted(qtbot)
+    window, backend, _ = converted_window(qtbot)
     window.auto_update_action.setChecked(False)
     window.parameter_panel.colors_spin.setValue(2)
     qtbot.wait(4 * DEBOUNCE_MS)
@@ -543,7 +383,7 @@ def test_manual_convert_uses_convert_now(qtbot) -> None:
 
 
 def test_convert_is_disabled_without_a_source(qtbot) -> None:
-    window, backend, _ = _window(qtbot)
+    window, backend, _ = build_window(qtbot)
 
     window.convert_action.trigger()
 
@@ -554,7 +394,7 @@ def test_convert_is_disabled_without_a_source(qtbot) -> None:
 
 
 def test_convert_while_converting_only_keeps_one_job(qtbot) -> None:
-    window, backend, _ = _converted(qtbot)
+    window, backend, _ = converted_window(qtbot)
     window.parameter_panel.colors_spin.setValue(2)  # gen 2, debounced
     qtbot.waitUntil(lambda: window.is_updating is True, timeout=2000)
 
@@ -567,7 +407,7 @@ def test_convert_while_converting_only_keeps_one_job(qtbot) -> None:
 
 
 def test_a_result_updates_the_previews_the_metrics_and_the_palette(qtbot) -> None:
-    window, backend, boxes = _open(qtbot)
+    window, backend, boxes = open_window(qtbot)
 
     backend.finish()
 
@@ -591,8 +431,8 @@ def test_a_result_updates_the_previews_the_metrics_and_the_palette(qtbot) -> Non
 
 def test_the_result_arrays_are_not_modified(qtbot) -> None:
     """The engine hands out read-only arrays; the window must convert, never touch them."""
-    window, backend, _ = _open(qtbot)
-    result = _result()
+    window, backend, _ = open_window(qtbot)
+    result = make_result()
     result.source_resized.setflags(write=False)
 
     backend.finish(result)
@@ -602,7 +442,7 @@ def test_the_result_arrays_are_not_modified(qtbot) -> None:
 
 
 def test_the_displayed_conversion_records_its_configuration(qtbot) -> None:
-    window, _, _ = _converted(qtbot)
+    window, _, _ = converted_window(qtbot)
 
     displayed = window.displayed
 
@@ -613,7 +453,7 @@ def test_the_displayed_conversion_records_its_configuration(qtbot) -> None:
 
 
 def test_the_status_bar_shows_the_generation_times(qtbot) -> None:
-    window, _, _ = _converted(qtbot)
+    window, _, _ = converted_window(qtbot)
     displayed = window.displayed
     assert displayed is not None
     total_ms = sum(displayed.timings.values()) * 1000
@@ -626,7 +466,7 @@ def test_the_status_bar_shows_the_generation_times(qtbot) -> None:
 
 
 def test_the_badge_and_the_status_follow_the_controller(qtbot) -> None:
-    window, backend, _ = _open(qtbot)
+    window, backend, _ = open_window(qtbot)
     assert window.state_badge.text() == "updating… (gen 1)"
 
     backend.finish()
@@ -643,7 +483,7 @@ def test_the_badge_and_the_status_follow_the_controller(qtbot) -> None:
 
 
 def test_the_zoom_actions_are_enabled_by_a_result(qtbot) -> None:
-    window, backend, _ = _open(qtbot)
+    window, backend, _ = open_window(qtbot)
     assert all(action.isEnabled() is False for action in window.zoom_actions.values())
 
     backend.finish()
@@ -656,29 +496,11 @@ def test_the_zoom_actions_are_enabled_by_a_result(qtbot) -> None:
     assert window.preview.is_fit is True
 
 
-# --- generations --------------------------------------------------------
-
-
-def test_a_superseded_result_is_never_shown(qtbot) -> None:
-    """A late answer for an old generation must not replace the current one."""
-    window, backend, _ = _converted(qtbot)
-    window.parameter_panel.colors_spin.setValue(2)  # gen 2
-    qtbot.waitUntil(lambda: window.is_updating is True, timeout=2000)
-    backend.finish(_result(width=20, height=16))  # the current generation
-    current = window.displayed
-    assert current is not None and current.generation == 2
-
-    backend.finish_late(1, _result())
-    backend.fail_late(1, "late failure")
-
-    assert window.displayed is current, "the old answer is ignored"
-    assert window.preview.views[0].pixmap_item.pixmap().width() == 20
-    assert window.error_banner.isHidden() is True, "a late failure shows no error"
-    assert window.last_error is None
+# --- changing the source ------------------------------------------------
 
 
 def test_the_previous_result_is_not_presented_as_the_new_source(qtbot, tmp_path: Path) -> None:
-    window, backend, _ = _converted(qtbot)
+    window, backend, _ = converted_window(qtbot)
     second = tmp_path / "second.png"
 
     assert window.open_image(second) is True
@@ -688,74 +510,18 @@ def test_the_previous_result_is_not_presented_as_the_new_source(qtbot, tmp_path:
     assert window.is_stale is True
     assert len(window.preview.views) == 2, "the old picture stays until the new one is ready"
 
-    backend.finish(_result(width=20, height=16))
+    backend.finish(make_result(width=20, height=16))
 
     assert window.displayed.generation == 2
     assert window.is_stale is False
     assert window.preview.views[0].pixmap_item.pixmap().width() == 20
 
 
-def test_staleness_comes_from_generations_not_config_equality(qtbot) -> None:
-    window, _, _ = _converted(qtbot)
-    original_colors = window.requested_config.colors
-
-    window.parameter_panel.colors_spin.setValue(2)
-    window.parameter_panel.colors_spin.setValue(original_colors)
-
-    assert window.displayed is not None
-    assert window.requested_config == window.displayed.config, "the configurations match again"
-    assert window.is_stale is True, "but the generation moved on, so the display is stale"
-
-
-def test_the_metrics_of_an_old_generation_are_marked_outdated(qtbot) -> None:
-    window, backend, _ = _converted(qtbot)
-    assert window.metrics_panel.outdated_generation is None
-
-    window.parameter_panel.colors_spin.setValue(2)
-
-    assert window.metrics_panel.outdated_generation == 1
-    assert window.metrics_panel.outdated_label.isHidden() is False
-    assert window.metrics_panel.outdated_label.text() == "outdated (gen 1)"
-    assert window.metrics_panel.metrics_form.rowCount() == 7, "the numbers are still readable"
-
-    qtbot.waitUntil(lambda: window.is_updating is True, timeout=2000)
-    backend.finish()
-
-    assert window.metrics_panel.outdated_generation is None
-    assert window.metrics_panel.outdated_label.isHidden() is True
-
-
-# --- failures -----------------------------------------------------------
-
-
-def test_a_failed_conversion_keeps_the_previous_result(qtbot) -> None:
-    window, backend, boxes = _converted(qtbot)
-    displayed = window.displayed
-    metrics_before = window.metrics_panel.metric_values
-    timings_before = window.metrics_panel.timing_values
-    window.parameter_panel.colors_spin.setValue(2)  # gen 2
-    qtbot.waitUntil(lambda: window.is_updating is True, timeout=2000)
-
-    backend.fail("boom")
-
-    assert boxes == [], "a conversion error is not modal (plan §7.6)"
-    assert window.error_banner.isHidden() is False
-    assert "The conversion failed" in window.error_label.text()
-    assert "boom" in window.error_label.text()
-    assert window.displayed is displayed, "the last good result must survive a failure"
-    assert displayed is not None and displayed.generation == 1
-    assert window.metrics_panel.metric_values == metrics_before
-    assert window.metrics_panel.timing_values == timings_before
-    assert window.last_error == "boom"
-    assert window.state_badge.text() == "error - still showing gen 1"
-    assert "error - still showing gen 1" in window.statusBar().currentMessage()
-    assert window.metrics_panel.outdated_generation == 1, "the numbers are from gen 1"
-    assert window.convert_action.isEnabled() is True, "the user can retry"
-    assert window.request_export() is False, "a stale result is not exportable"
+# --- the error banner ---------------------------------------------------
 
 
 def test_the_error_banner_can_be_dismissed_and_asks_for_details(qtbot) -> None:
-    window, backend, _ = _open(qtbot)
+    window, backend, _ = open_window(qtbot)
     backend.fail("boom")
     details: list[int] = []
     window.show_error_details = lambda: details.append(1)
@@ -770,7 +536,7 @@ def test_the_error_banner_can_be_dismissed_and_asks_for_details(qtbot) -> None:
 
 
 def test_the_error_disappears_after_the_next_good_result(qtbot) -> None:
-    window, backend, _ = _open(qtbot)
+    window, backend, _ = open_window(qtbot)
     backend.fail("boom")
     assert window.error_banner.isHidden() is False
 
@@ -783,90 +549,11 @@ def test_the_error_disappears_after_the_next_good_result(qtbot) -> None:
     assert window.state_badge.text() == "ready (gen 1)"
 
 
-def test_a_cancelled_conversion_shows_no_error(qtbot) -> None:
-    window, backend, boxes = _converted(qtbot)
-    window.parameter_panel.colors_spin.setValue(2)
-    qtbot.waitUntil(lambda: window.is_updating is True, timeout=2000)
-
-    backend.emit_cancelled()
-
-    assert boxes == []
-    assert window.error_banner.isHidden() is True
-    assert window.last_error is None
-    assert window.displayed is not None and window.displayed.generation == 1
-    assert window.state_badge.text() == "stale - showing gen 1", "no error, just a stale result"
-
-
-# --- export -------------------------------------------------------------
-
-
-def test_export_is_blocked_without_a_current_result(qtbot) -> None:
-    window, backend, _ = _window(qtbot)
-    emitted: list[ExportPayload] = []
-    window.export_requested.connect(emitted.append)
-
-    assert window.request_export() is False, "nothing is loaded"
-
-    window.open_image(REFERENCE_IMAGE)
-    assert window.request_export() is False, "a conversion is running"
-    backend.finish()
-    assert len(emitted) == 1, "the controller honours the waiting intent once the result lands"
-    assert emitted[0].displayed is window.displayed
-    assert window.request_export() is True
-    assert len(emitted) == 2
-
-    window.parameter_panel.colors_spin.setValue(2)
-    assert window.request_export() is False, "the result no longer matches the settings"
-    assert len(emitted) == 2, "a stale request emits nothing"
-
-
-def test_the_export_payload_keeps_the_image_config_and_the_export_settings_apart(qtbot) -> None:
-    """Export-only settings never convert, so they can be newer than the displayed result."""
-    window, backend, _ = _converted(qtbot)
-    emitted: list[ExportPayload] = []
-    window.export_requested.connect(emitted.append)
-    generation_before = window.latest_generation
-
-    window.controller.set_config(
-        dataclasses.replace(
-            window.requested_config,
-            export_formats=[ExportFormat.PNG, ExportFormat.ASM],
-            atari_colors=[0x11, 0x22],
-            label_name="menu",
-        )
-    )
-
-    assert window.latest_generation == generation_before, "export-only changes do not convert"
-    assert window.request_export() is True
-
-    payload = emitted[0]
-    assert payload.displayed is window.displayed
-    assert payload.displayed.config.export_formats == [ExportFormat.BIN], "the image config"
-    assert payload.export_config.export_formats == [ExportFormat.PNG, ExportFormat.ASM]
-    assert payload.export_config.atari_colors == [0x11, 0x22]
-    assert payload.export_config.label_name == "menu"
-    assert backend.conversions() == [1]
-
-
-def test_the_export_signal_is_the_isolated_hook_for_the_export_window(qtbot) -> None:
-    """T4.4 will connect to ``MainWindow.export_requested``; until then nothing else happens."""
-    window, backend, _ = _converted(qtbot)
-    emitted: list[ExportPayload] = []
-    window.export_requested.connect(emitted.append)
-
-    window.convert_action.trigger()  # a no-op: gen 1 is already displayed
-    assert emitted == []
-
-    window.request_export()
-    assert len(emitted) == 1
-    assert isinstance(emitted[0].displayed, DisplayedConversion)
-
-
 # --- small actions ------------------------------------------------------
 
 
 def test_the_about_dialog_reports_the_version(qtbot, monkeypatch) -> None:
-    window, _, _ = _window(qtbot)
+    window, _, _ = build_window(qtbot)
     captured: dict[str, str] = {}
     monkeypatch.setattr(
         QMessageBox,
@@ -881,7 +568,7 @@ def test_the_about_dialog_reports_the_version(qtbot, monkeypatch) -> None:
 
 
 def test_the_exit_action_closes_the_window(qtbot) -> None:
-    window, backend, _ = _window(qtbot)
+    window, backend, _ = build_window(qtbot)
     window.show()
     assert window.isVisible() is True
 
@@ -895,7 +582,7 @@ def test_the_exit_action_closes_the_window(qtbot) -> None:
 
 
 def test_closing_stops_the_controller_and_the_backend(qtbot) -> None:
-    window, backend, boxes = _converted(qtbot)
+    window, backend, boxes = converted_window(qtbot)
     window.show()
 
     window.close()
@@ -909,7 +596,7 @@ def test_closing_stops_the_controller_and_the_backend(qtbot) -> None:
 
 
 def test_a_shutdown_timeout_keeps_the_window_and_the_worker_alive(qtbot) -> None:
-    window, backend, boxes = _open(qtbot)
+    window, backend, boxes = open_window(qtbot)
     window.show()
     backend.shutdown_result = False
 
@@ -930,13 +617,13 @@ def test_a_shutdown_timeout_keeps_the_window_and_the_worker_alive(qtbot) -> None
 
 
 def test_late_signals_do_not_touch_a_closed_window(qtbot) -> None:
-    window, backend, boxes = _open(qtbot)
+    window, backend, boxes = open_window(qtbot)
     window.show()
     backend.shutdown_result = False
     window.close()
     views_before = [view.pixmap_item.pixmap().cacheKey() for view in window.preview.views]
 
-    backend.finished.emit(1, _result(width=20, height=16))
+    backend.finished.emit(1, make_result(width=20, height=16))
     backend.failed.emit(1, "too late")
     backend.cancelled.emit(1)
 
@@ -947,7 +634,7 @@ def test_late_signals_do_not_touch_a_closed_window(qtbot) -> None:
 
 
 def test_requests_are_refused_once_the_shutdown_started(qtbot) -> None:
-    window, backend, _ = _open(qtbot)
+    window, backend, _ = open_window(qtbot)
     window.show()
     backend.shutdown_result = False
     window.close()

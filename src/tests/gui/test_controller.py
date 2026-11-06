@@ -10,16 +10,20 @@ from __future__ import annotations
 import dataclasses
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 pytest.importorskip("PySide6", reason="PySide6 is not installed (install the 'gui' extra)")
 
+from PIL import Image  # noqa: E402
 from PySide6.QtCore import QObject, Signal  # noqa: E402
 from PySide6.QtTest import QSignalSpy  # noqa: E402
 
+from converter.pipeline import convert_image  # noqa: E402
 from converter.types import (  # noqa: E402
     ConversionConfig,
     ConversionResult,
+    DitherMethod,
     ExportFormat,
     SourceIdentity,
 )
@@ -177,6 +181,28 @@ def test_debounce_turns_five_changes_into_one_conversion(qtbot, make_controller)
     assert config.colors == 2, "the converted configuration is the newest one"
 
 
+def test_a_storm_of_changes_ends_with_only_the_newest_configuration(qtbot, make_controller) -> None:
+    """Every change is converted, but only the newest configuration may survive as the result."""
+    controller, backend = make_controller(debounce_ms=5)
+    _ready(controller, backend)
+    converted: list[ConversionConfig] = []
+
+    for colors in (2, 3, 2, 3, 2, 3):
+        controller.set_config(_with(controller, colors=colors))
+        qtbot.waitUntil(lambda: backend.running is not None, timeout=3000)
+        converted.append(backend.conversions[-1][1])
+        backend.finish()  # the answer of the moment, superseded by the next change
+
+    displayed = controller.displayed
+    assert displayed is not None
+    assert displayed.generation == controller.latest_generation
+    assert displayed.config == controller.requested_config, "only the newest configuration is shown"
+    assert displayed.config.colors == 3
+    assert converted[-1].colors == 3, "the last job ran the last configuration"
+    assert controller.is_stale is False
+    assert controller.status_text() == f"ready (gen {controller.latest_generation})"
+
+
 def test_a_late_result_of_an_old_generation_is_dropped(qtbot, make_controller) -> None:
     controller, backend = make_controller()
     _load(controller, backend)  # generation 1 is converting
@@ -200,6 +226,25 @@ def test_a_late_result_of_an_old_generation_is_dropped(qtbot, make_controller) -
     assert ready_spy.count() == 1
     assert controller.displayed is not None
     assert controller.displayed.generation == 2
+
+
+def test_a_cancelled_generation_is_reported_without_an_error(qtbot, make_controller) -> None:
+    """A cancellation is a state change, not a failure: no error, no display, the queue moves on."""
+    controller, backend = make_controller()
+    _load(controller, backend)  # generation 1 is converting
+    cancelled = QSignalSpy(controller.conversion_cancelled)
+    failed = QSignalSpy(controller.conversion_failed)
+
+    controller.set_config(_with(controller, colors=2))  # generation 2 waits, generation 1 cancelled
+    backend.confirm_cancelled(1)
+
+    assert cancelled.count() == 1
+    assert cancelled.at(0) == [1]
+    assert failed.count() == 0
+    assert controller.last_error is None, "a cancellation is not an error"
+    assert controller.displayed is None
+    qtbot.waitUntil(lambda: backend.convert_generations == [1, 2], timeout=3000)
+    assert controller.is_updating is True
 
 
 def test_a_result_for_a_superseded_generation_is_dropped(qtbot, make_controller) -> None:
@@ -339,6 +384,49 @@ def test_changing_the_source_during_a_conversion_waits_for_the_new_source(
     assert backend.convert_generations == [1, 2]
     assert controller.source_identity is not None
     assert controller.source_identity.path == "second.png"
+
+
+def test_a_failed_load_keeps_the_last_good_result_and_source(qtbot, make_controller) -> None:
+    """A source that cannot be read changes nothing: the previous one stays current."""
+    controller, backend = make_controller()
+    displayed = _ready(controller, backend)  # "photo.png" is loaded and displayed
+    identity = controller.source_identity
+    assert identity is not None
+    backend.auto_load = False
+
+    controller.set_source("broken.png")  # generation 2
+    backend.fail_load(2, "cannot read the file")
+
+    assert controller.displayed is displayed, "the failure never clears the preview"
+    assert controller.source_identity is identity, "the previous source is still installed"
+    assert controller.last_error == "cannot read the file"
+    assert controller.is_stale is True, "the requested source is not the displayed one"
+    assert backend.convert_generations == [1], "an unreadable source is never converted"
+
+
+def test_a_late_result_of_the_previous_source_is_dropped(qtbot, make_controller) -> None:
+    """Changing the source mid-conversion: the old source's answer may never become the new display."""
+    controller, backend = make_controller()
+    displayed = _ready(controller, backend)  # generation 1 of "photo.png"
+    controller.set_config(_with(controller, colors=2))  # generation 2 of the same source
+    qtbot.waitUntil(lambda: controller.is_updating is True, timeout=3000)
+    backend.auto_load = False
+
+    controller.set_source("second.png")  # generation 3: the new source replaces the work
+
+    backend.finish(2)  # the previous source answers too late
+
+    assert controller.displayed is displayed, "the answer belongs to the previous source"
+    assert controller.is_updating is False
+
+    backend.source_loaded.emit(3, SourceIdentity(path="second.png", size=2, mtime_ns=3))
+    qtbot.waitUntil(lambda: backend.convert_generations[-1] == 3, timeout=3000)
+    backend.finish(3)
+
+    assert controller.displayed is not None
+    assert controller.displayed.generation == 3
+    assert controller.displayed.config.colors == 2
+    assert controller.is_stale is False
 
 
 def test_a_late_load_of_a_superseded_generation_is_ignored(qtbot, make_controller) -> None:
@@ -597,6 +685,61 @@ def test_a_result_arriving_during_shutdown_is_not_displayed(qtbot, make_controll
 
 
 # --- integration with the real backend and engine -----------------------
+
+
+def _bayer_source(tmp_path: Path) -> Path:
+    """A small, deterministic source: no randomness, no fixtures to regenerate."""
+    pixels = np.zeros((32, 48, 3), dtype=np.uint8)
+    for y in range(pixels.shape[0]):
+        for x in range(pixels.shape[1]):
+            pixels[y, x] = (x * 5 % 256, y * 7 % 256, x * y % 256)
+    path = tmp_path / "bayer.png"
+    Image.fromarray(pixels).save(path)
+    return path
+
+
+def test_a_real_backend_matches_convert_image_with_bayer(qtbot, tmp_path: Path) -> None:
+    """Bayer through worker thread, controller and signals == the plain ``convert_image`` call."""
+    source = _bayer_source(tmp_path)
+    config = ConversionConfig(
+        width=160,
+        height=192,
+        colors=4,
+        dither=DitherMethod.BAYER4,
+        metrics=True,
+    )
+    expected = convert_image(source, config)
+
+    backend = QThreadBackend()
+    controller = ConversionController(backend, debounce_ms=10)
+    try:
+        controller.set_config(config)  # without a source this only records the request
+        with qtbot.waitSignal(controller.result_ready, timeout=60000) as ready:
+            controller.set_source(str(source))
+
+        displayed = ready.args[0]
+        assert isinstance(displayed, DisplayedConversion)
+        result = displayed.result
+        assert displayed.config.dither == DitherMethod.BAYER4
+        assert displayed.config == config
+        assert displayed.generation == controller.latest_generation
+        assert controller.is_stale is False
+
+        assert isinstance(result.indexed, np.ndarray)
+        assert result.indexed.dtype == np.uint8
+        assert result.indexed.shape == (192, 160)
+        assert result.source_resized.shape == (192, 160, 3)
+        np.testing.assert_array_equal(result.indexed, expected.indexed)
+        assert result.palette_indices == expected.palette_indices
+        np.testing.assert_array_equal(result.converted_rgb, expected.converted_rgb)
+        assert result.metrics == expected.metrics
+        assert result.indexed.flags.writeable is False, "the engine output stays frozen"
+        assert backend.is_running is True
+    finally:
+        assert controller.shutdown(15000) is True
+
+    assert backend.is_running is False, "the worker thread really stopped"
+    assert controller.status_text() == "shut down"
 
 
 def test_a_real_backend_produces_a_displayed_conversion(qtbot) -> None:
