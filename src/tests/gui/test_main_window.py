@@ -149,7 +149,7 @@ def test_the_menus_and_the_toolbar_expose_the_actions(qtbot) -> None:
     file_actions = [
         a.text().replace("&", "") for a in menus["File"].actions() if not a.isSeparator()
     ]
-    assert file_actions == ["Open…", "Exit"]
+    assert file_actions == ["Open…", "Export…", "Exit"]
     edit_actions = [
         a.text().replace("&", "") for a in menus["Edit"].actions() if not a.isSeparator()
     ]
@@ -166,6 +166,7 @@ def test_the_menus_and_the_toolbar_expose_the_actions(qtbot) -> None:
     assert toolbar is not None
     assert window.open_action in toolbar.actions()
     assert window.convert_action in toolbar.actions()
+    assert window.export_action in toolbar.actions()
     assert window.auto_update_action in toolbar.actions()
     assert all(action.isEnabled() is False for action in window.zoom_actions.values())
     assert window.fit_action.isEnabled() is False

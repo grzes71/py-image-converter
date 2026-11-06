@@ -9,7 +9,6 @@ state - the controller alone owns ``requested_config``, ``displayed``, the gener
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, Signal
@@ -37,12 +36,23 @@ from PySide6.QtWidgets import (
 
 import converter
 from converter.image_loader import SUPPORTED_EXTENSIONS
-from converter.types import ConversionConfig
+from converter.types import ConversionConfig, ExportFormat
 from converter_gui.controllers.conversion_controller import (
     DEBOUNCE_INTERVAL_MS,
     DEFAULT_SHUTDOWN_TIMEOUT_MS,
     ConversionController,
     DisplayedConversion,
+)
+from converter_gui.exporting import (
+    EXPORT_DESCRIPTION,
+    EXPORT_FORMATS,
+    ExportPayload,
+    availability,
+    chosen_format,
+    dialog_filters,
+    export_displayed,
+    path_with_suffix,
+    suggested_path,
 )
 from converter_gui.imaging import ndarray_to_qimage
 from converter_gui.widgets.image_preview import ZOOM_LEVELS, ImagePreview
@@ -77,29 +87,13 @@ OPEN_FILTER = "Images ({})".format(
     " ".join(f"*{suffix}" for suffix in sorted(SUPPORTED_EXTENSIONS))
 )
 
-
-@dataclass(frozen=True)
-class ExportPayload:
-    """Everything a future export dialog needs (T4.4).
-
-    Two configurations travel together on purpose, because they answer different questions:
-
-    * ``displayed`` is the conversion on screen. Its ``config`` is the configuration that produced the
-      image, so it contains image-relevant settings only - export-only changes never trigger a
-      conversion and therefore never reach it.
-    * ``export_config`` is the user's current configuration, including the export-only fields
-      (``export_formats``, ``preview``, ``label_name``, ``atari_colors``). It may be newer than the
-      displayed result: the image is still valid, only the way it will be written has changed.
-    """
-
-    displayed: DisplayedConversion
-    export_config: ConversionConfig
+EXPORT_FILTER_SEPARATOR = ";;"
 
 
 class MainWindow(QMainWindow):
     """The application window: menus, toolbar, previews, parameters, metrics and the async controller."""
 
-    #: Emitted with an :class:`ExportPayload` when a current result may be exported (hook for T4.4).
+    #: Emitted with an :class:`ExportPayload` when a current result may be exported.
     export_requested = Signal(object)
 
     def __init__(
@@ -120,6 +114,7 @@ class MainWindow(QMainWindow):
         self._controller = controller
         self._source_path: Path | None = None
         self._pending_source_path: Path | None = None
+        self._export_directory: Path | None = None
         self._loading_source = False
         self._closing = False
         self._shutdown_result: bool | None = None
@@ -204,6 +199,12 @@ class MainWindow(QMainWindow):
         self.convert_action.setEnabled(False)
         self.convert_action.triggered.connect(self.convert_now)
 
+        self.export_action = QAction("&Export…", self)
+        self.export_action.setShortcut(QKeySequence("Ctrl+E"))
+        self.export_action.setStatusTip("Save the displayed result as PNG, BIN, ASM, DTA or XEX")
+        self.export_action.setEnabled(False)
+        self.export_action.triggered.connect(self.export_dialog)
+
         self.auto_update_action = QAction("&Auto-update", self)
         self.auto_update_action.setCheckable(True)
         self.auto_update_action.setChecked(self._controller.auto_update)
@@ -231,6 +232,7 @@ class MainWindow(QMainWindow):
     def _build_menus(self) -> None:
         file_menu = self.menuBar().addMenu("&File")
         file_menu.addAction(self.open_action)
+        file_menu.addAction(self.export_action)
         file_menu.addSeparator()
         file_menu.addAction(self.exit_action)
 
@@ -254,6 +256,7 @@ class MainWindow(QMainWindow):
         toolbar.setMovable(False)
         toolbar.addAction(self.open_action)
         toolbar.addAction(self.convert_action)
+        toolbar.addAction(self.export_action)
         toolbar.addAction(self.auto_update_action)
         toolbar.addSeparator()
         for action in self.zoom_actions.values():
@@ -413,6 +416,98 @@ class MainWindow(QMainWindow):
             return False
         return self._controller.request_export()
 
+    def export_dialog(self) -> bool:
+        """Save the displayed result: the controller gates it, the save dialog asks where.
+
+        Returns ``True`` when files were written, ``False`` when the export was refused, cancelled or
+        failed (the status bar and, for failures, an error box say why).
+        """
+        if self._closing:
+            return False
+        if not self._controller.request_export():
+            self.statusBar().showMessage(self._export_blocked_reason())
+            return False
+        displayed = self._controller.displayed
+        if displayed is None:  # the controller only says yes with a result on screen
+            self.statusBar().showMessage(self._export_blocked_reason())
+            return False
+        return self._write_export(
+            ExportPayload(displayed=displayed, export_config=self._controller.requested_config)
+        )
+
+    def _export_blocked_reason(self) -> str:
+        """A one-line explanation for a refused export, taken from the controller's state."""
+        controller = self._controller
+        if controller.is_updating:
+            return "The conversion is still running - export again when it finishes."
+        if controller.displayed is None:
+            return "Nothing to export yet - open an image and convert it first."
+        if controller.is_stale:
+            return "The displayed result no longer matches the settings - convert before exporting."
+        return "Export is not available."
+
+    def _write_export(self, payload: ExportPayload) -> bool:
+        """Ask for a path and write the payload; every failure becomes a readable message."""
+        result = payload.displayed.result
+        verdicts = availability(result)
+        formats = [fmt for fmt in EXPORT_FORMATS if verdicts[fmt] is None]
+        if not formats:
+            self._report_error(
+                "Cannot export",
+                "This result cannot be written in any supported format.",
+                details="\n".join(
+                    f"{EXPORT_DESCRIPTION[fmt]}: {verdicts[fmt]}"
+                    for fmt in EXPORT_FORMATS
+                    if verdicts[fmt]
+                ),
+            )
+            return False
+
+        target = self._ask_export_target(formats)
+        if target is None:
+            self.statusBar().showMessage("Export cancelled")
+            return False
+        path, fmt = target
+
+        try:
+            written = export_displayed(payload, fmt, path)
+        except ValueError as exc:  # incompatible format chosen by name: explain, write nothing
+            self._report_error("Cannot export", str(exc))
+            self.statusBar().showMessage("Export failed - the format does not fit this result.")
+            return False
+        except OSError as exc:
+            self._report_error(
+                "Export failed",
+                f"Could not write {path_with_suffix(path, fmt).name}.",
+                details=str(exc),
+            )
+            self.statusBar().showMessage(f"Export failed - {exc}")
+            return False
+
+        self._export_directory = written[0].parent if written else Path(path).parent
+        names = ", ".join(item.name for item in written)
+        self.statusBar().showMessage(f"Exported {names} to {self._export_directory}")
+        return True
+
+    def _ask_export_target(self, formats: list[ExportFormat]) -> tuple[Path, ExportFormat] | None:
+        """The save dialog: folder, name and format, pre-filled with the remembered folder."""
+        filters = dialog_filters(formats)
+        directory = self._export_directory
+        if directory is None and self._source_path is not None:
+            directory = self._source_path.parent
+        stem = self._source_path.stem if self._source_path is not None else "screen"
+        start = suggested_path(directory, stem, formats[0])
+        selected = EXPORT_FILTER_SEPARATOR.join(text for text, _fmt in filters)
+        path, chosen_filter = QFileDialog.getSaveFileName(
+            self, "Export result", str(start), selected
+        )
+        if not path:
+            return None
+        fmt = chosen_format(path, chosen_filter, formats)
+        if fmt is None:
+            return None
+        return Path(path), fmt
+
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         if self._first_supported_path(event) is not None:
             event.acceptProposedAction()
@@ -553,6 +648,17 @@ class MainWindow(QMainWindow):
             has_source and not controller.is_updating and not self._closing
         )
         has_result = controller.displayed is not None
+        self.export_action.setEnabled(
+            has_result
+            and not controller.is_updating
+            and not controller.is_stale
+            and not self._closing
+        )
+        self.export_action.setToolTip(
+            "Export is only possible while the displayed result matches the settings"
+            if has_result and controller.is_stale
+            else "Save the displayed result (PNG, BIN, ASM, DTA or XEX)"
+        )
         for action in self.zoom_actions.values():
             action.setEnabled(has_result)
         self.fit_action.setEnabled(has_result)
