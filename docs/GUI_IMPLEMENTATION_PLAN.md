@@ -1,8 +1,8 @@
 # PyImageConverter – PySide6 GUI Implementation Plan
 
-> Status: **REVISION 2 – all decisions approved, implementation NOT started.**
-> No source code has been changed. Implementation begins only after an explicit go-ahead for
-> Phase 0 (see §17 checklist).
+> Status: **REVISION 6 – Phase 0 complete, Phase 1 in progress.** T1.1, T1.2, T1.3 (with the `73d3ec4`
+> follow-up), T1.4 and T1.7 are accepted; **T1.5 and T1.6 are not started**. The checklist in §17 and the
+> progress log in §20 are the authoritative status.
 >
 > Basis: direct inspection of `src/converter/**`, `src/tests/**`, `pyproject.toml`,
 > `convert.py`, `.github/workflows/release-on-pr-close.yml`, plus a read-only timing /
@@ -10,7 +10,8 @@
 >
 > Environment measured on the dev machine (2026-11-06): Python 3.14.3, NumPy 2.5.0,
 > Pillow 12.2.0, PySide6 6.12.0 installed, `pytest-qt` **not yet** installed (added in T2.1),
-> existing suite **30 passed**. The project floor stays Python 3.12 (no 3.13+ syntax).
+> existing suite at the time of the analysis **30 passed** (558 after T1.4, see §20).
+> The project floor stays Python 3.12 (no 3.13+ syntax).
 >
 > | Rev | Date | Content |
 > |---|---|---|
@@ -18,7 +19,8 @@
 > | 2 | 2026-11-06 | Q1–Q14 answered by the user (see §16), extra requirements integrated (cache integrity, responsiveness measurement, stale-result rules), tasks added (T0.3, T1.6, T1.7, T2.7, T3.5, Phase 6), §17 checklist and §18 commit plan added |
 > | 3 | 2026-11-06 | Phase 0 progress: T0.1 (`0b073cf`) and T0.2 (`cb47a36`) completed, B1–B4 fixed and verified, 59 tests green; T0.3 started. See §20 for the evidence |
 > | 4 | 2026-11-06 | **Phase 0 complete** — T0.1 (`0b073cf`), T0.2 (`cb47a36`) and T0.3 (`f345c4a`) done and accepted. Phase 1 (T1.1) **not started**; it needs a separate go-ahead |
-> | 5 | 2026-11-06 | T1.4 done (`09cde5b`): `check_export_compatibility`, public `normalize_antic_mode`, `export_result(..., antic_mode=...)`. Export architecture, verdict rules and the format-vs-product limit split documented in **§3.4.2**; §5.3 and §10 corrected to the implemented signature; evidence in §20.3 |
+> | 5 | 2026-11-06 | T1.4 done (`09cde5b`): `check_export_compatibility`, public `normalize_antic_mode`, `export_result(..., antic_mode=...)`. Export architecture, verdict rules and the format-vs-product limit split documented in **§3.4.2**; §5.3 and §10 corrected to the implemented signature; evidence in §20.4 |
+> | 6 | 2026-11-06 | Phase 1 status cleanup: T1.1 (`aa6fcd8`), T1.2 (`21ffdc3`) and T1.3 (`564d71b` + follow-up `73d3ec4`) marked done in §13/§17, the progress log gains §20.3, and the stale "Phase 1 not started" statements are removed. Documentation only |
 
 ---
 
@@ -1047,7 +1049,7 @@ Legend used below: **[R]** reuse existing, **[F]** refactor existing, **[N]** ne
 
 ### Phase 1 – Conversion engine API
 
-**T1.1 [F] Split `convert_image` into stage functions**
+**T1.1 [F] Split `convert_image` into stage functions — ✅ DONE (`aa6fcd8`)**
 - Files: `src/converter/pipeline.py`.
 - Depends: T0.1; T0.2 (the stages are written *after* the bug fix, so they contain the corrected
   palette handling and the refactor commit shows no behaviour change on its own)
@@ -1055,8 +1057,15 @@ Legend used below: **[R]** reuse existing, **[F]** refactor existing, **[N]** ne
   `convert_image` composes them with an unchanged signature.
 - Acceptance: golden + existing tests green; no CLI output change.
 - Tests: `test_pipeline_stages.py`.
+- **Result (done):** `pipeline.py` (+45/−23) now holds five stage functions and `convert_image` only
+  composes them, signature unchanged. All 20 golden cases stay byte-identical and independent probes of
+  `dither=none` (nearest/adaptive/perceptual), `floyd`, `adaptive`, `bayer4`, `atkinson` and `jarvis`
+  reproduce the previous indexed digests **and** metrics, so the split is behaviour-preserving by
+  measurement. `test_pipeline_stages.py` (+251) exercises each stage alone and asserts `convert_image`
+  equals their composition. Suite 59 → **76 passed**; ruff unchanged at the 9 pre-existing findings
+  (the `F401` in `pipeline.py` was deliberately left for a separate cleanup). Evidence: §20.3.
 
-**T1.2 [F] Extend result/config types (backward compatible)**
+**T1.2 [F] Extend result/config types (backward compatible) — ✅ DONE (`21ffdc3`)**
 - Files: `src/converter/types.py`, `src/converter/config.py`.
 - Do: `ConversionResult.timings: dict[str, float] = field(default_factory=dict)`,
   `converted_rgb` property; `validate_config()`; `MAX_ATARI_COLORS = 4`.
@@ -1064,8 +1073,17 @@ Legend used below: **[R]** reuse existing, **[F]** refactor existing, **[N]** ne
 - Acceptance: existing constructors still work; `to_dict`/`from_dict` output unchanged; validation
   never rejects a value the CLI accepts today.
 - Tests: extended `test_config.py`.
+- **Result (done):** `types.py` (+16): `MAX_ATARI_COLORS = 4` (export-only constant — the core and PNG
+  keep accepting more colours), `timings` with `default_factory=dict` (old constructors keep working) and
+  a `converted_rgb` property rendering with the real palette (lazy `indexed_to_rgb` import to avoid the
+  `types → quantizer → atari_palette → types` cycle; no cache, that is the engine's job). `config.py`
+  (+22): `validate_config()` returns every blocking problem in a stable field order (width/height ≥ 1,
+  2 ≤ `colors` ≤ 256, `background_index` 0–255), never raises and never mutates; `sharpen_strength`
+  (negative is a documented no-op) and `atari_colors` (export-side, T1.4/T6.1) are excluded on purpose,
+  and the CLI does not call it, so CLI behaviour is unchanged. Suite 76 → **109 passed**
+  (`test_config.py` +194/−2); ruff unchanged at 9. Evidence: §20.3.
 
-**T1.3 [N] `ConversionEngine`: staged LRU cache, cancellation, frozen caches**
+**T1.3 [N] `ConversionEngine`: staged LRU cache, cancellation, frozen caches — ✅ DONE (`564d71b`, follow-up `73d3ec4`)**
 - Files: `src/converter/engine.py` (new).
 - Depends: T1.1, T1.2
 - Result: API from §5.2, cache table from §8 (L1 = 4, L2 = 8, L3/L4 = `max_results`), bytes-backed
@@ -1076,6 +1094,19 @@ Legend used below: **[R]** reuse existing, **[F]** refactor existing, **[N]** ne
   the engine is writeable and `setflags(write=True)` / `.base` escalation are refused; cached
   metadata is isolated; cancellation never returns a partial result and leaves the cache consistent.
 - Tests: `test_engine.py` (full matrix, cache hit/miss, LRU, cancellation variants, timings).
+- **Result (done):** `engine.py` (+266) implements the §5.2 API and the §8 cache (L1 = 4, L2 = 8,
+  L3/L4 = `max_results`, default 32) keyed so that a dither change reuses prepare + palette, a quantizer
+  change under a dither costs nothing and export-only settings are free; a L3 hit whose L1 entry was
+  evicted recomputes only the prepared image. Cached arrays are read-only views over immutable `bytes`
+  buffers, so assignment, `setflags(write=True)` and `.base` escalation all fail, and non-array metadata
+  is isolated (tuple/list, `dataclasses.replace`). `timings` always carries the five keys, `0.0` = no
+  work; cancellation is checked at five boundaries, raises `ConversionCancelled` without a partial
+  result and keeps completed stages cached. `test_engine.py` (+652, 58 cases) → suite 109 → **167
+  passed**. **Follow-up `73d3ec4`** (no API change): `timings["palette"]` covers `choose_palette` *plus*
+  `palette_rgb` and "cache bookkeeping is never counted" is applied to every stage (both pinned by
+  instrumented tests), while `_freeze_array` now rejects any `dtype.hasobject`, including structured and
+  nested-structured dtypes with object fields. Suite 167 → **172 passed**; §5.2 updated in the same
+  commit (`4571bd4` had aligned the engine contract earlier). Ruff unchanged at 9. Evidence: §20.3.
 
 **T1.6 [N] Source identity, content fingerprint, cache-integrity suite**
 - Files: `src/converter/engine.py`, `src/converter/types.py` (`SourceIdentity`).
@@ -1089,7 +1120,7 @@ Legend used below: **[R]** reuse existing, **[F]** refactor existing, **[N]** ne
 - Tests: `test_engine_cache_integrity.py`, `test_engine_source_identity.py`.
 - Commit: may share a commit with T1.3 if both land in the same step — **never** with T0.2.
 
-**T1.7 [N] Colour-count capability audit (Q7) — ✅ DONE (`test_colour_counts.py`)**
+**T1.7 [N] Colour-count capability audit (Q7) — ✅ DONE (`60a9b5a`; `test_colour_counts.py`)**
 - Do: prove the pipeline is correct for N > 4 (5 palette selectors, all 18 dithers, 4 quantizers,
   metrics, heatmap) and record the exact per-exporter limits that `check_export_compatibility` reports.
 - Files: `src/tests/test_colour_counts.py`; findings appended to §3.4 of this plan.
@@ -1117,7 +1148,7 @@ Legend used below: **[R]** reuse existing, **[F]** refactor existing, **[N]** ne
   make `export_xex` raise the known `IndexError` are predicted instead of masked. A 33-case matrix
   compares every verdict with an actual export attempt. `export_result` is byte-identical with the
   default `None`. Suite 498 → **558 passed**, goldens 20/20, ruff unchanged at the 9 pre-existing
-  findings. Design: §3.4.2; evidence: §20.3.
+  findings. Design: §3.4.2; evidence: §20.4.
 
 **T1.5 [F] Public API surface**
 - Files: `src/converter/__init__.py`.
@@ -1397,15 +1428,15 @@ Legend: **[R]** reuse, **[F]** refactor, **[N]** new. "golden" = `test_cli_golde
 | ☑ | **T0.2** Fix B1–B4 [F] — done `cb47a36` | T0.1 | Real palette used in `dither=none`, metrics and previews; `adaptive` ≠ `nearest`; goldens/baselines regenerated intentionally; diff limited to `dither=none` + metrics/previews; **no refactoring in this commit** |
 | ☑ | **T0.3** B5 emulator investigation [N] — done (diagnostics only) | – | [`docs/XEX_COLOR_REGISTERS.md`](XEX_COLOR_REGISTERS.md): register dumps + screenshots for D/E/F, verdict **B5 confirmed**; D/E fix proposed, **F needs a separate design decision** (T6.1); evidence in `docs/evidence/xex-color-registers/`; **no source change** |
 
-### Phase 1 — engine (blocking for the GUI)
+### Phase 1 — engine (blocking for the GUI) — T1.1–T1.4 + T1.7 ✅ done; T1.5, T1.6 pending
 
 | ☐ | Task | Depends on | Acceptance (short) |
 |---|---|---|---|
-| ☐ | **T1.1** Stage functions [F] | T0.2 | `convert_image` = composition of stages, byte-identical; golden green |
-| ☐ | **T1.2** Types/config [F] | T1.1 | `timings`, `converted_rgb`, `validate_config`, `MAX_ATARI_COLORS`; existing constructors and JSON unchanged |
-| ☐ | **T1.3** `ConversionEngine` [N] | T1.1, T1.2 | Bit-exact vs `convert_image`; cache table §8 verified by call counts; LRU eviction; cancel raises `ConversionCancelled`; no writeable array returned |
+| ☑ | **T1.1** Stage functions [F] — done `aa6fcd8` | T0.2 | `convert_image` = composition of stages, byte-identical; golden green |
+| ☑ | **T1.2** Types/config [F] — done `21ffdc3` | T1.1 | `timings`, `converted_rgb`, `validate_config`, `MAX_ATARI_COLORS`; existing constructors and JSON unchanged |
+| ☑ | **T1.3** `ConversionEngine` [N] — done `564d71b` + fix `73d3ec4` | T1.1, T1.2 | Bit-exact vs `convert_image`; cache table §8 verified by call counts; LRU eviction; cancel raises `ConversionCancelled`; no writeable array returned |
 | ☐ | **T1.6** Source identity + integrity [N] | T1.3 | `SourceIdentity`, optional SHA-256, `source_is_unchanged`; every §8.1 rule tested; `set_source_array` never aliases caller memory |
-| ☑ | **T1.7** Colour-count audit [N] — done | T1.1 | N ∈ {2,3,4,8,16} verified for all selectors/quantizers/dithers; exporter limits pinned by running the real exporters; §3.4.1 records the findings and `MAX_PNG_COLORS = 16` (GUI cap, not a PNG limit) |
+| ☑ | **T1.7** Colour-count audit [N] — done `60a9b5a` | T1.1 | N ∈ {2,3,4,8,16} verified for all selectors/quantizers/dithers; exporter limits pinned by running the real exporters; §3.4.1 records the findings and `MAX_PNG_COLORS = 16` (GUI cap, not a PNG limit) |
 | ☑ | **T1.4** Export helpers [F] — done `09cde5b` | T1.1, T1.7 | `export_result(..., *, antic_mode=None)` byte-identical by default; `check_export_compatibility(result, fmt, *, antic_mode=None)` verdicts match the real exporter errors (incl. the known XEX `IndexError` on bad widths); public `normalize_antic_mode`; goldens green |
 | ☐ | **T1.5** Public API [F] | T1.3 | `from converter import …` works; importing `converter.main` leaves `PySide6` out of `sys.modules` |
 
@@ -1568,10 +1599,73 @@ T6.1 option list: **[`docs/XEX_COLOR_REGISTERS.md`](XEX_COLOR_REGISTERS.md)**. R
 (screenshots, register dumps, VBI disassembly, probes) live in `docs/evidence/xex-color-registers/`.
 No source, test or golden file was changed by T0.3.
 
-**Phase 0 is complete** (T0.1–T0.3 accepted); **Phase 1 (T1.1) has not been started** and requires a
-separate go-ahead.
+**Phase 0 is complete** (T0.1–T0.3 accepted). Phase 1 started after a separate go-ahead: T1.1, T1.2,
+T1.3 and T1.7 are recorded in §20.3, T1.4 in §20.4. **T1.5 and T1.6 are still open.**
 
-### 20.3 Phase 1 — T1.4 (export helpers)
+### 20.3 Phase 1 — engine API (T1.1, T1.2, T1.3 + T1.7)
+
+| Task | Commit | Scope |
+|---|---|---|
+| **T1.1** Split `convert_image` into stages | `aa6fcd8` | `pipeline.py` (+45/−23), new `test_pipeline_stages.py` (+251) |
+| **T1.2** `timings`, `validate_config`, `converted_rgb` | `21ffdc3` | `types.py` (+16), `config.py` (+22), `test_config.py` (+194/−2) |
+| **T1.3** `ConversionEngine` | `564d71b` | new `engine.py` (+266), new `test_engine.py` (+652, 58 cases) |
+| **T1.3 follow-up** | `73d3ec4` | `engine.py` (+7/−2), `test_engine.py` (+77/−2), §5.2 of this plan (+4/−3) |
+| **T1.7** Colour-count audit | `60a9b5a` | new `test_colour_counts.py` (+528, 326 cases), §3.4.1 (+54/−3) |
+
+Documentation-only commits of this phase: `5644d4b` (T1.1 and T1.7 stay separate commits, §18) and
+`4571bd4` (engine contract aligned with the T1.3 decisions, §5.2).
+
+**Suite growth, re-measured per commit** (one worktree per commit, `python -m pytest -q` with the
+worktree `src` first on the path): 59 → **76** (T1.1) → **109** (T1.2) → **167** (T1.3) → **172**
+(`73d3ec4`) → **498** (T1.7) → **558** (T1.4, §20.4). `ruff check src` reported the same **9**
+pre-existing findings at every one of those commits, i.e. no task added a finding.
+
+**T1.1 result.** `prepare_image`, `choose_palette`, `compute_edges`, `render_indexed` (quantize with the
+B4 variance map for `dither=none`) and `build_metrics` extracted; `convert_image` now only composes them
+and keeps its signature, so the CLI, the exporters and the existing tests are untouched. Behaviour is
+preserved *by measurement*: all 20 golden cases stay byte-identical, and independent probes of
+`dither=none` (nearest/adaptive/perceptual), `floyd`, `adaptive`, `bayer4`, `atkinson` and `jarvis`
+reproduce the previous indexed digests **and** metrics. `test_pipeline_stages.py` exercises every stage
+on its own and asserts `convert_image` equals their composition. The pre-existing `F401` in `pipeline.py`
+was deliberately left for a separate cleanup, and the T1.7 audit rode in its own commit (§18).
+
+**T1.2 result.** Backward-compatible additions only. `MAX_ATARI_COLORS = 4` is an **export-only** constant
+(the core and PNG keep accepting more colours); `ConversionResult.timings` uses `default_factory=dict`, so
+every existing constructor still works; `converted_rgb` renders with the selected palette and imports
+`indexed_to_rgb` lazily to break the `types → quantizer → atari_palette → types` cycle (no cache — that
+is the engine's job). `validate_config()` collects every blocking problem in a stable field order
+(width/height ≥ 1, 2 ≤ `colors` ≤ 256, `background_index` 0–255), never raises and never mutates;
+`sharpen_strength` (a negative value is a documented no-op) and `atari_colors` (export-side, T1.4/T6.1)
+are excluded on purpose. `to_dict`/`from_dict` output is unchanged and the CLI never calls the validator,
+so CLI behaviour is unaffected.
+
+**T1.3 result.** `ConversionEngine` implements §5.2 on top of the §8 cache: L0 source, L1 prepared image +
+edge mask (4), L2 palette (8), L3/L4 indexed images and metrics (`max_results`, default 32). The keys
+make a dither change reuse prepare + palette, a quantizer change under a dither cost nothing, and
+export-only settings free; a L3 hit whose L1 entry was evicted recomputes only the prepared image. Every
+cached array is a read-only view over an immutable `bytes` buffer, so assignment, `setflags(write=True)`
+and `.base` escalation all fail; non-array metadata is isolated as well (`palette_indices` stored as a
+tuple and returned as a list, `MetricResult` returned through `dataclasses.replace`). `timings` always
+carries the five keys and `0.0` means "no work" (cache hit or skipped stage). `cancel()` is checked at
+five stage boundaries, raises `ConversionCancelled` without ever returning a partial result and keeps
+completed stages cached. The engine imports no Qt and is documented as single-threaded.
+
+**T1.3 follow-up (`73d3ec4`).** Two measured corrections, no API or cache-key change:
+`timings["palette"]` now spans `choose_palette` **plus** `palette_rgb` (the window closed too early and
+reported a number that did not reconcile with the total), and the rule "cache bookkeeping is never
+counted" is applied to every stage, both pinned by instrumented tests. `_freeze_array` rejects any dtype
+with `dtype.hasobject`, so structured and nested-structured dtypes with object fields are refused as well,
+while structured dtypes without objects are still frozen. §5.2 was updated in the same commit.
+
+**T1.7 result.** 326 cases pin the colour-count behaviour of every selector, quantizer and dither for
+N ∈ {2, 3, 4, 8, 16} and record the exporter limits by running the real exporters. Findings and the
+declared-vs-actually-used distinction live in §3.4.1; the verified limits are what T1.4's
+`check_export_compatibility` reports (§3.4.2).
+
+**Status of Phase 1:** T1.1, T1.2, T1.3 (with `73d3ec4`), T1.4 and T1.7 are **done and accepted**; T1.5
+(public API) and T1.6 (source identity + cache-integrity suite) are **not started**.
+
+### 20.4 Phase 1 — T1.4 (export helpers)
 
 | Task | Commit | Scope |
 |---|---|---|
