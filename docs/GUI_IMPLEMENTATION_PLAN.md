@@ -331,16 +331,20 @@ result.palette_rgb      # N×3
 result.converted_rgb    # NEW property: palette_rgb[indexed]
 result.source_resized
 result.metrics          # MetricResult | None
-result.timings          # NEW: {"resize": 0.009, "palette": 0.35, ...}
+result.timings          # NEW: always {"prepare", "palette", "edges", "render", "metrics"};
+                        # 0.0 means the stage did no work (cache hit or intentionally skipped)
 ```
 
 ### 5.1 Stage functions (refactor of `pipeline.py`, behaviour-preserving)
 
 ```python
-def prepare_image(source: RGBImage, config: ConversionConfig) -> RGBImage: ...      # resize+sharpen
-def choose_palette(prepared: RGBImage, config) -> tuple[list[int], NDArray[np.uint8]]: ...
-def render_indexed(prepared, palette_indices, palette_rgb, edge_mask, config) -> IndexedImage: ...
-def build_metrics(prepared, indexed, palette_indices) -> MetricResult: ...
+def prepare_image(image: RGBImage, config: ConversionConfig) -> RGBImage: ...   # resize + sharpen
+def choose_palette(image: RGBImage, config: ConversionConfig) -> list[int]: ...
+def compute_edges(image: RGBImage) -> EdgeMask: ...
+def render_indexed(image: RGBImage, palette_indices: list[int], edge_mask: EdgeMask,
+                   config: ConversionConfig) -> IndexedImage: ...
+def build_metrics(image: RGBImage, indexed: IndexedImage,
+                  palette_indices: list[int]) -> MetricResult: ...
 
 def convert_image(input_path, config) -> ConversionResult:   # unchanged signature & output
     source = load_image(input_path).data
@@ -364,7 +368,7 @@ class SourceIdentity:
 
 
 class ConversionEngine:
-    def __init__(self, max_results: int = 16) -> None: ...
+    def __init__(self, max_results: int = 32) -> None: ...
     def set_source(self, path: str | Path, *, verify_content: bool = False) -> None
     def set_source_array(self, image: RGBImage) -> None       # copies + freezes the input
     @property
@@ -377,14 +381,23 @@ class ConversionEngine:
     def clear_cache(self) -> None
 ```
 
+- `max_results` caps the **L3 (indexed)** and **L4 (metrics)** caches (default 32); L1 (prepared image +
+  edge mask) and L2 (palette) use the fixed capacities from §8 (4 and 8).
 - `cancel()` is checked **between stages**. Cancelling inside a dither loop would require
   touching all 16 algorithm classes, which is deferred (see 7.4).
 - `compute_metrics=None` means "use `config.metrics`" (CLI semantics). The GUI passes `True`.
-- **Cache integrity (mandatory):** every array stored in a cache level is frozen with
-  `array.setflags(write=False)` *before* insertion, and the engine returns those same frozen
-  arrays. A caller that tries to mutate cached data gets
-  `ValueError: assignment destination is read-only` instead of silently corrupting a later
-  conversion. Callers needing to modify data must `.copy()`. See §8.1.
+- **`timings` contract:** every result carries exactly five keys — `prepare`, `palette`, `edges`,
+  `render`, `metrics` — always present and always in that order. The value is the wall-clock
+  seconds the stage actually ran; **`0.0` means no work was performed**, i.e. the stage was served
+  from cache *or* intentionally skipped (metrics disabled). The two cases are told apart by
+  `result.metrics`: `None` ⇒ metrics were skipped, a `MetricResult` with `timings["metrics"] == 0.0`
+  ⇒ cached.
+- **Cache integrity (mandatory):** every array stored in a cache level is held as a **read-only view
+  over an immutable `bytes` buffer** (`np.frombuffer(array.tobytes(), dtype=…).reshape(shape)`), and
+  the engine returns those same arrays. A plain `setflags(write=False)` is **not** sufficient: NumPy
+  lets a caller flip it back with `setflags(write=True)` and mutate the buffer. With the bytes-backed
+  form the assignment, the flag flip *and* the `.base` escalation all raise `ValueError`, instead of
+  silently corrupting a later conversion. Callers needing to modify data must `.copy()`. See §8.1.
 - **Source invalidation:** the L0 key is the `SourceIdentity`. By default it is the cheap
   `(resolved path, size, mtime_ns)` triple. `verify_content=True` adds a SHA-256 digest of the
   file bytes (`hashlib.file_digest`, stdlib, Python ≥ 3.11), which detects a rewrite that keeps
@@ -393,6 +406,9 @@ class ConversionEngine:
   *File ▸ Reload* and on window re-activation, never in the interactive conversion path.
 - The engine is pure Python + NumPy: no Qt import, no open file handles, no global mutable state,
   so it also remains usable from a future process-based backend (§7.3).
+- **Concurrency:** an instance is **not thread-safe** and is meant for a **single worker thread**
+  (T3.1 owns it inside the conversion worker; the GUI thread never calls it directly). No locks and
+  no global state; separate instances have independent caches.
 
 ### 5.3 Supporting additions
 
@@ -696,10 +712,12 @@ Based on the verified dependency matrix (3.2):
 | L3 indexed | L2 key + (dither, quantizer **only if dither == none**) | indexed (frozen) | + dither/quantizer |
 | L4 metrics | L3 key | MetricResult | (derived) |
 
-- Each level is a small LRU (`collections.OrderedDict`). Suggested sizes: L1 = 4, L2 = 8,
-  L3 = 32. Arrays are about 92 KB each at 160×192, so memory is negligible. The source (possibly
-  tens of MB) is kept once.
+- Each level is a small LRU (`collections.OrderedDict`). L1 = 4 and L2 = 8 are fixed capacities;
+  L3 and L4 are both bounded by `max_results` (default 32). Arrays are about 92 KB each at 160×192,
+  so memory is negligible. The source (possibly tens of MB) is kept once.
 - Edge mask is stored with L1 because it depends only on the prepared image.
+- A L3/L4 hit whose L1 entry has been evicted recomputes the prepared image (an L1 miss) but still
+  reuses the cached indexed image, so a result is always complete; LRU order is refreshed on hits.
 - The histogram stage is **removed from the hot path**: once B4 is fixed (T0.2) the variance map is
   needed only for `quantizer == adaptive and dither == none`, and it is then computed lazily inside
   the L3 stage. `analyze_histogram(..., full=True)` (203 ms) is never called by the engine. The
@@ -722,16 +740,18 @@ Cached NumPy arrays are treated as **immutable**. This is enforced, not just doc
 
 | Rule | Implementation |
 |---|---|
-| Freeze on insert | `_freeze(value)` calls `array.setflags(write=False)` on every array before it enters a cache level (recursively for the L1 `(prepared, edge_mask)` tuple) |
-| No defensive copies on read | the engine returns the *frozen* arrays; a `ValueError` on write is the intended failure mode, so silent corruption becomes impossible |
+| Freeze on insert | `_freeze(value)` stores every array as a **read-only view over an immutable `bytes` buffer** — `np.frombuffer(array.tobytes(), dtype=array.dtype).reshape(array.shape)` — recursively for the L1 `(prepared, edge_mask)` tuple. A plain `setflags(write=False)` is *not* enough: NumPy lets a caller flip it back with `setflags(write=True)`. Object dtypes are rejected explicitly (the converter only produces numeric arrays). |
+| No defensive copies on read | the engine returns the *frozen* arrays; the assignment, a `setflags(write=True)` attempt and a `.base` escalation all raise `ValueError`, so silent corruption becomes impossible. The single copy into the immutable buffer happens **on insert** (≈0,01–0,03 ms per array at 160×192); reads stay copy-free |
+| Non-array values | `palette_indices` is stored as a tuple and returned as a fresh `list`; `MetricResult` is returned via `dataclasses.replace(...)`, so callers can never mutate cached metadata |
 | Copy at the boundary | `set_source_array()` copies the caller's array before freezing; `ConversionResult` fields reference frozen buffers, so rebinding a field is allowed while buffer mutation is not |
 | GUI never mutates engine data | `imaging.ndarray_to_qimage()` reads only, requires C-contiguity (copying if needed) and hands Qt an owned `QImage` (`.copy()`), so Qt can neither free nor write engine memory |
-| Exporter safety | exporters only read; `pack_antic_e` already works on a fresh `astype` copy |
-| Tested | `test_engine_cache_integrity.py`: writing to any returned array raises; a second conversion after a failed write attempt is bit-identical to a fresh engine's; mutating a `.copy()` never affects the cache; `set_source_array` input mutation after the call has no effect |
+| Exporter safety | exporters only read; `pack_antic_e` already works on a fresh `astype` copy, and all five exporters produce byte-identical output from frozen arrays |
+| Tested | `test_engine_cache_integrity.py`: writing to any returned array raises; **`setflags(write=True)` and `.base` escalation are refused**; a second conversion after a failed write attempt is bit-identical to a fresh engine's; mutating a `.copy()` never affects the cache; `set_source_array` input mutation after the call has no effect |
 
 Deliberate trade-off: a caller that needs to modify a result must copy (≈92 KB at 160×192, or a few
 MB for a full-res source). That is cheaper than defensive copies on every stage boundary, and it
-makes accidental cache corruption a loud error instead of a wrong picture.
+makes accidental cache corruption a loud error instead of a wrong picture. Because the cached buffers
+are immutable `bytes` objects, even a deliberate `setflags(write=True)` cannot unlock them.
 
 ---
 
@@ -803,7 +823,7 @@ Export dialog (`dialogs/export_dialog.py`):
 |---|---|
 | `test_cli_golden.py` (**T0.1**) | Runs `main([...])` for a matrix (formats × dithers {none, floyd, bayer4, atkinson, adaptive} × palettes {popularity, kmeans}, `--atari-colors`, `--label-name`, `-x -m D/E`, `--config`, `--save-config`) on `fixtures/reference.png`; compares SHA-256 of outputs with `fixtures/golden/cli_golden.json` captured **before** refactoring |
 | `test_pipeline_stages.py` | `convert_image` == composition of stage functions (bit-exact) |
-| `test_engine.py` | engine output == `convert_image` for a config matrix; cache: monkeypatch stage functions with call counters and assert the table in §8; LRU eviction; `set_source` invalidation; cancellation raises `ConversionCancelled` and leaves the cache consistent; `compute_metrics` override |
+| `test_engine.py` | engine output == `convert_image` for a config matrix; cache: monkeypatch stage functions with call counters and assert the table in §8; LRU eviction of L1/L3/L4, including an L3 hit with an evicted L1; `set_source` invalidation and `clear_cache`; cancellation at every boundary (cold cache, warm cache, after each stored stage) plus a bit-exact re-run afterwards; metadata isolation (`palette_indices`, `MetricResult`); frozen arrays refuse writes, `setflags(write=True)` and `.base` escalation; the five-key `timings` contract incl. cache zeros; `compute_metrics` override |
 | `test_engine_cache_integrity.py` | §8.1: every cached/returned array is read-only; a write attempt raises and leaves the cache intact; `.copy()` round-trips are independent; `set_source_array` freezes a copy, not the caller's array |
 | `test_engine_source_identity.py` | rewritten file with identical size detected with `verify_content=True`; `touch` alone is "unchanged" with `verify_content=True` and does not reload the source; `source_identity` is stable across conversions |
 | `test_colour_counts.py` (T1.7) | pipeline correctness for N ∈ {2, 3, 4, 8, 16}: indexed range, dither output, metrics, heatmap; per-exporter limits reported by `check_export_compatibility` match real exporter behaviour |
@@ -941,12 +961,14 @@ Legend used below: **[R]** reuse existing, **[F]** refactor existing, **[N]** ne
 **T1.3 [N] `ConversionEngine`: staged LRU cache, cancellation, frozen caches**
 - Files: `src/converter/engine.py` (new).
 - Depends: T1.1, T1.2
-- Result: API from §5.2, cache table from §8, freeze-on-insert (§8.1), `cancel` checked between
-  stages, per-stage `timings`.
+- Result: API from §5.2, cache table from §8 (L1 = 4, L2 = 8, L3/L4 = `max_results`), bytes-backed
+  frozen caches (§8.1), `cancel` checked between the five stage boundaries, the five-key `timings`
+  contract.
 - Acceptance: engine == `convert_image` bit-exact over the matrix; cache call-count assertions;
   changing dither on a cached palette completes without calling resize/palette; no array returned by
-  the engine is writeable.
-- Tests: `test_engine.py`.
+  the engine is writeable and `setflags(write=True)` / `.base` escalation are refused; cached
+  metadata is isolated; cancellation never returns a partial result and leaves the cache consistent.
+- Tests: `test_engine.py` (full matrix, cache hit/miss, LRU, cancellation variants, timings).
 
 **T1.6 [N] Source identity, content fingerprint, cache-integrity suite**
 - Files: `src/converter/engine.py`, `src/converter/types.py` (`SourceIdentity`).
