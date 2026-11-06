@@ -17,14 +17,24 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "ruff>=0.4",
+    "pytest-qt",
+]
+gui = [
+    "PySide6>=6.6",
 ]
 
 [project.scripts]
 atari-convert = "converter.main:main"
 
+[project.gui-scripts]
+atari-convert-gui = "converter_gui.app:main"
+
 [tool.pytest.ini_options]
 testpaths = ["src/tests"]
 pythonpath = ["src"]
+# pytest-qt lives in the "dev" extra while PySide6 lives in "gui". Without Qt the plugin aborts the
+# whole session, so it is never autoloaded; conftest.py loads it explicitly when PySide6 exists.
+addopts = "-p no:pytest-qt"
 
 [tool.ruff]
 line-length = 100
