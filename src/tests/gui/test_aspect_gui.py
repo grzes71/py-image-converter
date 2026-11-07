@@ -103,7 +103,7 @@ def test_the_default_configuration_is_unchanged(qtbot) -> None:
 
 @pytest.mark.parametrize(
     ("key", "factor"),
-    [("antic_e_192", 2.08), ("antic_e_190", 2.08), ("antic_d_96", 1.04), ("antic_f_192", 1.04)],
+    [("antic_e_192", 1.86), ("antic_e_190", 1.86), ("antic_d_96", 0.93), ("antic_f_192", 0.93)],
 )
 def test_a_preset_shows_its_pal_factor(key: str, factor: float, qtbot) -> None:
     panel = ParameterPanel()
@@ -113,11 +113,11 @@ def test_a_preset_shows_its_pal_factor(key: str, factor: float, qtbot) -> None:
     panel.target_combo.setCurrentIndex(panel.target_combo.findData(key))
     QApplication.processEvents()
 
-    assert panel.pixel_aspect_spin.value() == pytest.approx(factor)
+    assert panel.pixel_aspect_spin.value() == pytest.approx(factor, abs=0.01)
     assert panel.pixel_aspect_spin.isEnabled() is False, "a preset owns its factor"
     assert panel.config().pixel_aspect is None, "the value is derived, not stored"
-    assert f"{factor:g}:1" in panel.aspect_hint.text()
-    assert get_target(key).pixel_aspect == pytest.approx(factor)
+    assert f"{factor:.2f}:1" in panel.aspect_hint.text()
+    assert get_target(key).pixel_aspect == pytest.approx(factor, abs=0.01)
 
 
 def test_switching_the_target_updates_its_factor(qtbot) -> None:
@@ -127,15 +127,15 @@ def test_switching_the_target_updates_its_factor(qtbot) -> None:
 
     panel.target_combo.setCurrentIndex(panel.target_combo.findData("antic_d_96"))
     QApplication.processEvents()
-    assert panel.pixel_aspect_spin.value() == pytest.approx(1.04)
+    assert panel.pixel_aspect_spin.value() == pytest.approx(0.93)
 
     panel.target_combo.setCurrentIndex(panel.target_combo.findData("antic_e_192"))
     QApplication.processEvents()
-    assert panel.pixel_aspect_spin.value() == pytest.approx(2.08)
+    assert panel.pixel_aspect_spin.value() == pytest.approx(1.86)
 
     panel.target_combo.setCurrentIndex(panel.target_combo.findData("antic_f_192"))
     QApplication.processEvents()
-    assert panel.pixel_aspect_spin.value() == pytest.approx(1.04)
+    assert panel.pixel_aspect_spin.value() == pytest.approx(0.93)
 
 
 def test_a_custom_size_can_set_an_explicit_factor(qtbot) -> None:
@@ -153,7 +153,7 @@ def test_a_custom_size_can_set_an_explicit_factor(qtbot) -> None:
     QApplication.processEvents()
 
     assert panel.config().pixel_aspect == pytest.approx(1.5)
-    assert "1.5:1" in panel.aspect_hint.text()
+    assert "1.50:1" in panel.aspect_hint.text()
 
 
 def test_the_explicit_factor_is_dropped_again_at_zero(qtbot) -> None:
@@ -191,7 +191,7 @@ def test_the_hint_describes_the_selected_mode(qtbot) -> None:
     assert "stretched onto the whole target grid" in panel.aspect_hint.text()
 
     _select(panel, AspectMode.FIT)
-    assert "2.08:1" in panel.aspect_hint.text()
+    assert "1.86:1" in panel.aspect_hint.text()
     assert "ANTIC E" in panel.aspect_hint.text()
 
     _select(panel, AspectMode.DISABLED)
@@ -228,26 +228,26 @@ def test_the_image_key_covers_the_correction() -> None:
 def test_the_result_view_is_drawn_with_the_pixel_aspect(qtbot) -> None:
     preview = _preview(qtbot)
 
-    preview.set_image_pair(_qimage(160, 192), _qimage(160, 192), secondary_aspect=2.08)
+    preview.set_image_pair(_qimage(160, 192), _qimage(160, 192), secondary_aspect=1.86)
 
     primary, secondary = preview.views
     assert primary.transform().m11() == pytest.approx(1.0)
     assert primary.transform().m22() == pytest.approx(1.0)
-    assert secondary.transform().m11() == pytest.approx(2.08), "wider pixels, wider on screen"
+    assert secondary.transform().m11() == pytest.approx(1.86), "wider pixels, wider on screen"
     assert secondary.transform().m22() == pytest.approx(1.0), "the height is not touched"
 
 
 @pytest.mark.parametrize("level", ZOOM_LEVELS)
 def test_the_pixel_aspect_scales_with_the_zoom(level: float, qtbot) -> None:
     preview = _preview(qtbot)
-    preview.set_image_pair(_qimage(160, 192), _qimage(160, 192), secondary_aspect=1.04)
+    preview.set_image_pair(_qimage(160, 192), _qimage(160, 192), secondary_aspect=0.93)
 
     preview.set_zoom(level)
 
     primary, secondary = preview.views
     assert preview.zoom == pytest.approx(level), "the zoom level is unchanged"
     assert primary.transform().m11() == pytest.approx(level)
-    assert secondary.transform().m11() == pytest.approx(level * 1.04)
+    assert secondary.transform().m11() == pytest.approx(level * 0.93)
     assert secondary.transform().m22() == pytest.approx(level)
 
 
@@ -256,14 +256,14 @@ def test_the_aspect_does_not_reset_the_zoom(qtbot) -> None:
     preview.set_image_pair(_qimage(160, 192), _qimage(160, 192))
     preview.set_zoom(4.0)
 
-    preview.set_image_pair(_qimage(160, 192), _qimage(160, 192), secondary_aspect=2.08)
+    preview.set_image_pair(_qimage(160, 192), _qimage(160, 192), secondary_aspect=1.86)
 
     assert preview.zoom == pytest.approx(4.0)
     assert preview.is_fit is False
-    assert preview.views[1].transform().m11() == pytest.approx(8.32)
+    assert preview.views[1].transform().m11() == pytest.approx(4.0 * 1.86)
 
 
-def test_disabled_keeps_the_square_pixel_preview(qtbot) -> None:
+def test_a_square_pixel_aspect_draws_square_pixels(qtbot) -> None:
     preview = _preview(qtbot)
 
     preview.set_image_pair(_qimage(160, 192), _qimage(160, 192), secondary_aspect=1.0)
@@ -279,18 +279,18 @@ def test_fit_uses_the_displayed_width(qtbot) -> None:
     preview.fit()
     plain = preview.zoom
 
-    preview.set_image_pair(_qimage(160, 192), _qimage(160, 192), secondary_aspect=2.08)
+    preview.set_image_pair(_qimage(160, 192), _qimage(160, 192), secondary_aspect=1.86)
 
     stretched = preview.zoom
     viewport = preview.views[0].viewport().size()
     assert stretched < plain, "the wider result needs a smaller factor to fit"
-    assert 160 * 2.08 * stretched <= viewport.width() + 1
+    assert 160 * 1.86 * stretched <= viewport.width() + 1
     assert 192 * stretched <= viewport.height() + 1
 
 
 def test_panning_keeps_both_views_on_the_same_content(qtbot) -> None:
     preview = _preview(qtbot, 200, 200)
-    preview.set_image_pair(_qimage(160, 192), _qimage(160, 192), secondary_aspect=2.08)
+    preview.set_image_pair(_qimage(160, 192), _qimage(160, 192), secondary_aspect=1.86)
     preview.set_zoom(8.0)
     primary, secondary = preview.views
     # Scrollbars are integral, so the alignment is exact up to one device pixel.
@@ -321,10 +321,11 @@ def test_an_invalid_pixel_aspect_is_rejected(invalid: float, qtbot) -> None:
 
 
 def _displayed(config: ConversionConfig) -> DisplayedConversion:
+    """A finished conversion of the size the configuration asks for (its mode decides the shape)."""
     return DisplayedConversion(
         generation=1,
         config=config,
-        result=make_result(),
+        result=make_result(width=config.width, height=config.height),
         timings={},
         produced_at=0.0,
     )
@@ -338,18 +339,22 @@ def test_the_window_shows_the_result_with_the_mode_aspect(qtbot) -> None:
     QApplication.processEvents()
 
     primary, secondary = window.preview.views
-    assert secondary.transform().m11() == pytest.approx(2.08 * primary.transform().m11())
-    assert preview_pixel_aspect(config) == pytest.approx(2.08)
+    factor = preview_pixel_aspect(config)
+    assert factor == pytest.approx(1.86, abs=0.01)
+    assert secondary.transform().m11() == pytest.approx(factor * primary.transform().m11())
 
 
-def test_the_window_keeps_square_pixels_while_disabled(qtbot) -> None:
+def test_the_window_applies_the_aspect_whatever_the_correction_is(qtbot) -> None:
+    """Mechanism B does not switch off with mechanism A: ``disabled`` is still shown on hardware."""
     window, _backend, _boxes = build_window(qtbot)
 
     window._controller.result_ready.emit(_displayed(ConversionConfig()))
     QApplication.processEvents()
 
     primary, secondary = window.preview.views
-    assert secondary.transform().m11() == pytest.approx(primary.transform().m11())
+    assert secondary.transform().m11() == pytest.approx(
+        1.86 * primary.transform().m11(), abs=0.01
+    ), "the default (disabled) result is displayed with hardware pixels"
 
 
 def test_the_window_follows_the_displayed_configuration_not_the_requested_one(qtbot) -> None:
@@ -363,5 +368,5 @@ def test_the_window_follows_the_displayed_configuration_not_the_requested_one(qt
     QApplication.processEvents()
 
     secondary = window.preview.views[1]
-    assert secondary.transform().m11() == pytest.approx(2.0 * 1.04)
+    assert secondary.transform().m11() == pytest.approx(2.0 * 0.93, abs=0.02)
     assert window.preview.zoom == pytest.approx(2.0), "the zoom the user chose survives"

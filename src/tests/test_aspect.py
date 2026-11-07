@@ -12,6 +12,8 @@ import numpy as np
 import pytest
 
 from converter.aspect import (
+    PAL_DISPLAY_ASPECT,
+    PAL_RASTER,
     PAL_SCREENS,
     apply_geometry,
     background_rgb,
@@ -51,9 +53,10 @@ def _solid(width: int, height: int, colour: tuple[int, int, int] = (128, 128, 12
 
 
 def test_the_pal_table_holds_the_documented_pal_factors() -> None:
-    assert pal_screen(*ANTIC_D).pixel_aspect == pytest.approx(1.04)
-    assert pal_screen(*ANTIC_E).pixel_aspect == pytest.approx(2.08)
-    assert pal_screen(*ANTIC_F).pixel_aspect == pytest.approx(1.04)
+    """Measured in Altirra: 2 raster columns per D/E pixel, 1 per ANTIC F pixel, 0.93 per column."""
+    assert pal_screen(*ANTIC_D).pixel_aspect == pytest.approx(0.93, abs=0.01)
+    assert pal_screen(*ANTIC_E).pixel_aspect == pytest.approx(1.86, abs=0.01)
+    assert pal_screen(*ANTIC_F).pixel_aspect == pytest.approx(0.93, abs=0.01)
     assert [screen.name for screen in PAL_SCREENS][:2] == ["ANTIC D", "ANTIC E"]
 
 
@@ -69,14 +72,19 @@ def test_the_pal_screens_cover_the_same_physical_area() -> None:
 
     for aspect in aspects[1:]:
         assert aspect == pytest.approx(aspects[0], rel=1e-6)
-    assert aspects[0] == pytest.approx((160 * 2.08) / 192)
+
+    # One raster column is PAL_DISPLAY_ASPECT / (336/240) of a raster line; ANTIC E uses two per pixel.
+    column = PAL_DISPLAY_ASPECT / (PAL_RASTER[0] / PAL_RASTER[1])
+    assert aspects[0] == pytest.approx((160 * 2 * column) / 192)
 
 
 def test_the_190_row_screen_keeps_the_antic_e_factor() -> None:
     screen = pal_screen(160, 190)
 
     assert screen is not None
-    assert screen.pixel_aspect == pytest.approx(2.08), "fewer rows do not change the pixel width"
+    assert screen.pixel_aspect == pytest.approx(pal_screen(*ANTIC_E).pixel_aspect), (
+        "fewer rows do not change how wide a pixel is"
+    )
 
 
 @pytest.mark.parametrize(("width", "height"), [(200, 100), (160, 100), (8, 8), (640, 480)])
@@ -113,9 +121,9 @@ def test_fit_of_a_source_with_the_target_size() -> None:
     plan = plan_geometry(ANTIC_E, E_FIT)
 
     assert plan is not None
-    assert plan.pixel_aspect == pytest.approx(2.08)
-    assert plan.content == (77, 192), "160x192 square pixels are narrower than the PAL screen"
-    assert plan.offset == (41, 0), "centred: (160 - 77) // 2"
+    assert plan.pixel_aspect == pytest.approx(1.86, abs=0.01)
+    assert plan.content == (86, 192), "round(192 * 0.8333 / 1.857) = 86"
+    assert plan.offset == (37, 0), "centred: (160 - 86) // 2"
     assert plan.crop is None
 
 
@@ -123,25 +131,25 @@ def test_fit_of_a_panoramic_source() -> None:
     plan = plan_geometry((400, 100), E_FIT)
 
     assert plan is not None
-    assert plan.content == (160, 83), "round(160 * 2.08 / 4.0) = 83"
-    assert plan.offset == (0, 54)
-    assert 192 - 54 - 83 == 55, "an odd remainder stays at the bottom edge"
+    assert plan.content == (160, 74), "round(160 * 1.857 / 4.0) = 74"
+    assert plan.offset == (0, 59)
+    assert 192 - 59 - 74 == 59, "an odd remainder stays at the bottom edge"
 
 
 def test_fit_of_a_portrait_source() -> None:
     plan = plan_geometry((100, 400), E_FIT)
 
     assert plan is not None
-    assert plan.content == (23, 192), "round(192 * 0.25 / 2.08) = 23"
-    assert plan.offset == (68, 0), "centred: (160 - 23) // 2"
+    assert plan.content == (26, 192), "round(192 * 0.25 / 1.857) = 26"
+    assert plan.offset == (67, 0), "centred: (160 - 26) // 2"
 
 
 def test_fit_of_the_same_source_in_antic_d_fills_fewer_rows() -> None:
     plan = plan_geometry(ANTIC_E, ConversionConfig(width=160, height=96, aspect=AspectMode.FIT))
 
     assert plan is not None
-    assert plan.content == (77, 96), "same display aspect, half the rows"
-    assert plan.offset == (41, 0)
+    assert plan.content == (86, 96), "same display aspect, half the rows"
+    assert plan.offset == (37, 0)
 
 
 @pytest.mark.parametrize("target", [ANTIC_D, ANTIC_E, ANTIC_F])
@@ -184,7 +192,7 @@ def test_crop_trims_the_rows_of_a_narrow_source() -> None:
     plan = plan_geometry(ANTIC_E, E_CROP)
 
     assert plan is not None
-    assert plan.crop == (0, 50, 160, 92), "round(160 / 1.7333) = 92 rows survive, centred"
+    assert plan.crop == (0, 44, 160, 103), "round(160 / 1.5476) = 103 rows survive, centred"
     assert plan.content == ANTIC_E, "crop fills the whole grid"
     assert plan.offset == (0, 0)
 
@@ -193,14 +201,14 @@ def test_crop_trims_the_columns_of_a_wide_source() -> None:
     plan = plan_geometry((400, 100), E_CROP)
 
     assert plan is not None
-    assert plan.crop == (113, 0, 173, 100), "round(100 * 1.7333) = 173 columns survive"
+    assert plan.crop == (122, 0, 155, 100), "round(100 * 1.5476) = 155 columns survive"
 
 
 def test_crop_keeps_a_source_that_already_has_the_screen_proportions() -> None:
-    plan = plan_geometry((173, 100), E_CROP)
+    plan = plan_geometry((155, 100), E_CROP)
 
     assert plan is not None
-    assert plan.crop == (0, 0, 173, 100)
+    assert plan.crop == (0, 0, 155, 100)
 
 
 def test_crop_of_antic_f_uses_its_own_factor() -> None:
@@ -208,8 +216,8 @@ def test_crop_of_antic_f_uses_its_own_factor() -> None:
     plan = plan_geometry((160, 192), config)
 
     assert plan is not None
-    assert plan.pixel_aspect == pytest.approx(1.04)
-    assert plan.crop == (0, 50, 160, 92), "same display aspect as ANTIC E, different grid"
+    assert plan.pixel_aspect == pytest.approx(0.93, abs=0.01)
+    assert plan.crop == (0, 44, 160, 103), "same display aspect as ANTIC E, different grid"
 
 
 # --- the resulting image ------------------------------------------------
@@ -402,28 +410,37 @@ def test_an_unknown_mode_in_a_configuration_is_rejected() -> None:
 
 
 def test_effective_pixel_aspect_follows_the_configured_mode() -> None:
-    assert effective_pixel_aspect(ConversionConfig(width=160, height=96)) == pytest.approx(1.04)
-    assert effective_pixel_aspect(ConversionConfig(width=160, height=192)) == pytest.approx(2.08)
-    assert effective_pixel_aspect(ConversionConfig(width=320, height=192)) == pytest.approx(1.04)
+    assert effective_pixel_aspect(ConversionConfig(width=160, height=96)) == pytest.approx(
+        0.93, abs=0.01
+    )
+    assert effective_pixel_aspect(ConversionConfig(width=160, height=192)) == pytest.approx(
+        1.86, abs=0.01
+    )
+    assert effective_pixel_aspect(ConversionConfig(width=320, height=192)) == pytest.approx(
+        0.93, abs=0.01
+    )
     assert effective_pixel_aspect(ConversionConfig(width=200, height=100)) is None
 
 
-def test_the_preview_aspect_is_square_while_disabled() -> None:
-    """Disabled keeps the preview as it was: the result is drawn with square pixels."""
-    assert preview_pixel_aspect(ConversionConfig()) == pytest.approx(1.0)
-    assert preview_pixel_aspect(ConversionConfig(width=160, height=192)) == pytest.approx(1.0)
+def test_the_preview_aspect_does_not_depend_on_the_correction() -> None:
+    """Mechanism A (conversion geometry) and B (display pixel shape) are independent."""
+    for mode in (AspectMode.DISABLED, AspectMode.FIT, AspectMode.CROP):
+        config = ConversionConfig(width=160, height=192, aspect=mode)
+        assert preview_pixel_aspect(config) == pytest.approx(1.86, abs=0.01)
+
+    assert preview_pixel_aspect(ConversionConfig()) == pytest.approx(1.86, abs=0.01), (
+        "the default (disabled) conversion is displayed with hardware pixels too"
+    )
 
 
-def test_the_preview_aspect_follows_the_enabled_mode() -> None:
-    fit = ConversionConfig(width=160, height=192, aspect=AspectMode.FIT)
-
-    assert preview_pixel_aspect(fit) == pytest.approx(2.08)
-    assert preview_pixel_aspect(
-        ConversionConfig(width=320, height=192, aspect=AspectMode.FIT)
-    ) == pytest.approx(1.04)
-    assert preview_pixel_aspect(
-        ConversionConfig(width=160, height=96, aspect=AspectMode.CROP)
-    ) == pytest.approx(1.04)
+def test_the_preview_aspect_follows_the_mode() -> None:
+    for mode in (AspectMode.DISABLED, AspectMode.FIT, AspectMode.CROP):
+        assert preview_pixel_aspect(ConversionConfig(width=320, height=192, aspect=mode)) == (
+            pytest.approx(0.93, abs=0.01)
+        )
+        assert preview_pixel_aspect(ConversionConfig(width=160, height=96, aspect=mode)) == (
+            pytest.approx(0.93, abs=0.01)
+        )
 
 
 def test_the_preview_aspect_stays_square_for_an_unknown_size() -> None:

@@ -42,10 +42,10 @@ def test_the_documented_targets_exist() -> None:
 @pytest.mark.parametrize(
     ("key", "width", "height", "max_colors", "mode", "aspect"),
     [
-        ("antic_e_192", 160, 192, MAX_ATARI_COLORS, "E", 2.08),
-        ("antic_e_190", 160, 190, MAX_ATARI_COLORS, "E", 2.08),
-        ("antic_d_96", 160, 96, MAX_ATARI_COLORS, "D", 1.04),
-        ("antic_f_192", 320, 192, 2, "F", 1.04),
+        ("antic_e_192", 160, 192, MAX_ATARI_COLORS, "E", 1.86),
+        ("antic_e_190", 160, 190, MAX_ATARI_COLORS, "E", 1.86),
+        ("antic_d_96", 160, 96, MAX_ATARI_COLORS, "D", 0.93),
+        ("antic_f_192", 320, 192, 2, "F", 0.93),
     ],
 )
 def test_target_values(
@@ -56,7 +56,7 @@ def test_target_values(
     assert (target.width, target.height) == (width, height)
     assert target.max_colors == max_colors
     assert target.default_antic_mode == mode
-    assert target.pixel_aspect == pytest.approx(aspect)
+    assert target.pixel_aspect == pytest.approx(aspect, abs=0.01)
     assert target.is_custom is False
 
 
