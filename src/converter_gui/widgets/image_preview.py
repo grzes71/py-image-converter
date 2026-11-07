@@ -13,13 +13,20 @@ stays Fit, following the new size). The view state changes only when the caller 
 Scaling is done with the view transform, never by resampling the pixmap: the ``QGraphicsPixmapItem``
 uses ``Qt.FastTransformation`` and the smoothing render hint is switched off, so at 8x one image pixel
 is drawn as a crisp 8x8 block (plan §6.1).
+
+The pair view can also show the second image with a non-square pixel: ``set_image_pair`` takes a
+``secondary_aspect`` factor that multiplies the horizontal scale of that view only. That is a display
+setting, not a data change - the Atari result keeps its exact pixels while looking the way it looks on
+a PAL monitor. Zoom, Fit and panning keep working as before on both views; when the two views are
+scaled differently, scrolling is synchronised on the scene position, so the same part of the image
+stays in view.
 """
 
 from __future__ import annotations
 
 import math
 
-from PySide6.QtCore import QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QImage, QPainter, QPixmap, QTransform, QWheelEvent
 from PySide6.QtWidgets import (
     QFrame,
@@ -59,6 +66,17 @@ def _next_zoom(current: float, step: int) -> float:
         if level < current - _EPSILON:
             return level
     return ZOOM_LEVELS[0]
+
+
+def _as_aspect(factor: float) -> float:
+    """Validate a horizontal display factor: finite and positive, ``1.0`` showing square pixels."""
+    try:
+        value = float(factor)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(f"expected a number, got {factor!r}") from exc
+    if not math.isfinite(value) or value <= 0.0:
+        raise ValueError(f"pixel aspect must be a positive number, got {factor!r}")
+    return value
 
 
 class _PreviewView(QGraphicsView):
@@ -128,6 +146,7 @@ class ImagePreview(QWidget):
         self._fit_mode = False
         self._synchronising = False
         self._secondary: _PreviewView | None = None
+        self._secondary_aspect = 1.0
 
         self._layout = QHBoxLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)
@@ -160,15 +179,26 @@ class ImagePreview(QWidget):
         self._primary.set_pixmap(pixmap)
         self._restore_view()
 
-    def set_image_pair(self, primary: QImage | QPixmap, secondary: QImage | QPixmap) -> None:
+    def set_image_pair(
+        self,
+        primary: QImage | QPixmap,
+        secondary: QImage | QPixmap,
+        *,
+        secondary_aspect: float = 1.0,
+    ) -> None:
         """Show two images side by side (the sizes may differ), keeping the current view state.
 
         A conversion produces new pixels for the image the user is already looking at, so replacing them
         must not move the view: the zoom factor and the scroll position are kept, and Fit stays Fit (it
         simply follows the size of the new image).
+
+        ``secondary_aspect`` stretches the second view horizontally only, which is how the non-square
+        pixel of an Atari mode is displayed. It changes nothing about the image data and does not touch
+        the zoom level; the primary view always shows square pixels.
         """
         primary_pixmap = _as_pixmap(primary)
         secondary_pixmap = _as_pixmap(secondary)
+        self._secondary_aspect = _as_aspect(secondary_aspect)
         self._show_pair()
         self._primary.set_pixmap(primary_pixmap)
         secondary_view = self._secondary
@@ -182,6 +212,7 @@ class ImagePreview(QWidget):
             view.clear_pixmap()
         self._show_single()
         self._fit_mode = False
+        self._secondary_aspect = 1.0
         self._apply_zoom(1.0)
 
     def set_zoom(self, factor: float) -> None:
@@ -222,6 +253,12 @@ class ImagePreview(QWidget):
 
     # --- zoom and pan ---------------------------------------------------
 
+    def _aspect_of(self, view: _PreviewView) -> float:
+        """Horizontal display factor of one view: the pixel aspect for the pair's second image."""
+        if self._secondary is not None and view is self._secondary:
+            return self._secondary_aspect
+        return 1.0
+
     def _restore_view(self) -> None:
         """Put the view state back on new pixels: Fit follows the image, a chosen zoom simply stays."""
         self._apply_zoom(self._fit_zoom() if self._fit_mode else self._zoom)
@@ -230,9 +267,9 @@ class ImagePreview(QWidget):
         factor = max(float(factor), _MIN_ZOOM)
         self._synchronising = True
         try:
-            transform = QTransform.fromScale(factor, factor)
             for view in self._views:
-                view.setTransform(transform)
+                aspect = self._aspect_of(view)
+                view.setTransform(QTransform.fromScale(factor * aspect, factor))
             self._copy_scroll(source if source is not None else self._views[0])
         finally:
             self._synchronising = False
@@ -240,14 +277,26 @@ class ImagePreview(QWidget):
         self.zoomChanged.emit(factor)
 
     def _copy_scroll(self, source: _PreviewView) -> None:
-        """Give every other view the scroll position of ``source`` (Qt clamps the values)."""
-        horizontal = source.horizontalScrollBar().value()
-        vertical = source.verticalScrollBar().value()
+        """Show the same scene point at the top-left corner of every other view.
+
+        Copying the raw scrollbar values would drift apart as soon as two views use different
+        scaling (the horizontal scale differs by the pixel aspect), so the offset is converted
+        through the scene. With equal factors the two are identical. Qt clamps the values, so a
+        smaller image simply stays anchored at its edge.
+        """
+        if len(self._views) < 2:
+            return
+        anchor = source.mapToScene(0, 0)
         for view in self._views:
             if view is source:
                 continue
-            view.horizontalScrollBar().setValue(horizontal)
-            view.verticalScrollBar().setValue(vertical)
+            offset = view.mapFromScene(QPointF(anchor))
+            if offset.x():
+                bar = view.horizontalScrollBar()
+                bar.setValue(bar.value() + offset.x())
+            if offset.y():
+                bar = view.verticalScrollBar()
+                bar.setValue(bar.value() + offset.y())
 
     def _on_scrolled(self, source: _PreviewView) -> None:
         if self._synchronising:
@@ -274,9 +323,20 @@ class ImagePreview(QWidget):
         return factor
 
     def _image_size(self) -> QSize:
-        """Bounding size of the visible images, so a pair with different sizes still fits."""
-        sizes = [view.pixmap_item.pixmap().size() for view in self._views if not view.isHidden()]
-        sizes = [size for size in sizes if not size.isEmpty()]
+        """Bounding size of the visible images *as displayed*, so a pair still fits.
+
+        The second view is scaled by its pixel aspect, so its displayed width is wider than its
+        pixel width; Fit has to use that, otherwise an ANTIC E result would overflow sideways.
+        """
+        sizes = []
+        for view in self._views:
+            if view.isHidden():
+                continue
+            size = view.pixmap_item.pixmap().size()
+            if size.isEmpty():
+                continue
+            width = int(round(size.width() * self._aspect_of(view)))
+            sizes.append(QSize(max(width, 1), size.height()))
         if not sizes:
             return QSize()
         return QSize(max(size.width() for size in sizes), max(size.height() for size in sizes))

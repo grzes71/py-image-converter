@@ -9,8 +9,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+import converter.aspect as aspect_module
 import converter.engine as engine_module
-import converter.pipeline as pipeline_module
 from converter.engine import ConversionCancelled, ConversionEngine
 from converter.pipeline import convert_image
 from converter.types import (
@@ -187,13 +187,14 @@ def test_changing_size_recomputes_prepared_image(
     engine.convert(base)
 
     resizes = {"calls": 0}
-    original_resize = pipeline_module.resize_image
+    # The resize now lives in the geometry stage (`converter.aspect`), which `prepare_image` calls.
+    original_resize = aspect_module.resize_image
 
     def counting_resize(*args, **kwargs):
         resizes["calls"] += 1
         return original_resize(*args, **kwargs)
 
-    monkeypatch.setattr(pipeline_module, "resize_image", counting_resize)
+    monkeypatch.setattr(aspect_module, "resize_image", counting_resize)
 
     _reset(stage_calls)
     engine.convert(replace(base, height=96))

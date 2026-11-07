@@ -22,6 +22,14 @@ class ResizeMethod(str, Enum):
     LANCZOS = "lanczos"
 
 
+class AspectMode(str, Enum):
+    """How the PAL pixel aspect ratio is corrected (see :mod:`converter.aspect`)."""
+
+    DISABLED = "disabled"
+    FIT = "fit"
+    CROP = "crop"
+
+
 class DitherMethod(str, Enum):
     NONE = "none"
     FLOYD = "floyd"
@@ -167,6 +175,11 @@ class ConversionConfig:
     dither: DitherMethod = DitherMethod.FLOYD
     quantizer: QuantizerMethod = QuantizerMethod.NEAREST
     resize: ResizeMethod = ResizeMethod.LANCZOS
+    aspect: AspectMode = AspectMode.DISABLED
+    """PAL pixel aspect correction. ``DISABLED`` keeps the historical stretch-to-fit result."""
+    pixel_aspect: float | None = None
+    """Explicit pixel aspect override, for sizes the PAL table does not know (Custom targets)."""
+
     sharpen: bool = False
     sharpen_strength: float = 1.0
     background_index: int = 0
@@ -197,6 +210,12 @@ class ConversionConfig:
             result["atari_colors"] = self.atari_colors
         if self.label_name is not None:
             result["label_name"] = self.label_name
+        # Only written when they differ from the historical behaviour, so a saved configuration of an
+        # untouched converter keeps its exact shape (and `--save-config` output stays byte-identical).
+        if self.aspect is not AspectMode.DISABLED:
+            result["aspect"] = self.aspect.value
+        if self.pixel_aspect is not None:
+            result["pixel_aspect"] = self.pixel_aspect
         return result
 
     @classmethod
@@ -213,6 +232,10 @@ class ConversionConfig:
             dither=DitherMethod(data.get("dither", "floyd")),
             quantizer=QuantizerMethod(data.get("quantizer", "nearest")),
             resize=ResizeMethod(data.get("resize", "lanczos")),
+            aspect=AspectMode(data.get("aspect", "disabled")),
+            pixel_aspect=(
+                float(data["pixel_aspect"]) if data.get("pixel_aspect") is not None else None
+            ),
             sharpen=bool(data.get("sharpen", False)),
             sharpen_strength=float(data.get("sharpen_strength", 1.0)),
             background_index=int(data.get("background_index", 0)),

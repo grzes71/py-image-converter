@@ -1,7 +1,7 @@
 """Tests for the conversion targets (T2.7).
 
-Pure data and pure helpers: the assertions spell out the values from plan §6.2, so a changed table is
-a visible failure rather than a silent GUI difference.
+Pure data and pure helpers: the assertions spell out the values from plan §6.2 and the PAL pixel
+aspects of §4.2, so a changed table is a visible failure rather than a silent GUI difference.
 """
 
 from __future__ import annotations
@@ -10,6 +10,7 @@ import pytest
 
 pytest.importorskip("PySide6", reason="PySide6 is not installed (install the 'gui' extra)")
 
+from converter.aspect import pal_screen  # noqa: E402
 from converter.types import MAX_ATARI_COLORS, ConversionConfig  # noqa: E402
 from converter_gui.targets import (  # noqa: E402
     ALL_TARGETS,
@@ -41,10 +42,10 @@ def test_the_documented_targets_exist() -> None:
 @pytest.mark.parametrize(
     ("key", "width", "height", "max_colors", "mode", "aspect"),
     [
-        ("antic_e_192", 160, 192, MAX_ATARI_COLORS, "E", 2.0),
-        ("antic_e_190", 160, 190, MAX_ATARI_COLORS, "E", 2.0),
-        ("antic_d_96", 160, 96, MAX_ATARI_COLORS, "D", 2.0),
-        ("antic_f_192", 320, 192, 2, "F", 1.0),
+        ("antic_e_192", 160, 192, MAX_ATARI_COLORS, "E", 2.08),
+        ("antic_e_190", 160, 190, MAX_ATARI_COLORS, "E", 2.08),
+        ("antic_d_96", 160, 96, MAX_ATARI_COLORS, "D", 1.04),
+        ("antic_f_192", 320, 192, 2, "F", 1.04),
     ],
 )
 def test_target_values(
@@ -57,6 +58,17 @@ def test_target_values(
     assert target.default_antic_mode == mode
     assert target.pixel_aspect == pytest.approx(aspect)
     assert target.is_custom is False
+
+
+def test_the_pixel_aspects_come_from_the_central_pal_table() -> None:
+    """The GUI must not keep its own copy of the hardware facts (converter.aspect owns them)."""
+    for target in TARGETS:
+        screen = pal_screen(target.width, target.height)
+        assert screen is not None
+        assert target.pixel_aspect == screen.pixel_aspect
+
+    assert get_target("antic_d_96").pixel_aspect != get_target("antic_e_192").pixel_aspect
+    assert CUSTOM.pixel_aspect is None, "a Custom size must not get an invented factor"
 
 
 def test_custom_is_last_and_has_no_size() -> None:
@@ -121,7 +133,5 @@ def test_applying_custom_keeps_the_size() -> None:
 
 
 def test_targets_are_hashable_and_comparable() -> None:
-    assert TargetSpec("k", "label", 10, 20, 4, "E", 2.0) == TargetSpec(
-        "k", "label", 10, 20, 4, "E", 2.0
-    )
+    assert TargetSpec("k", "label", 10, 20, 4, "E") == TargetSpec("k", "label", 10, 20, 4, "E")
     assert len({target.key for target in ALL_TARGETS}) == len(ALL_TARGETS)

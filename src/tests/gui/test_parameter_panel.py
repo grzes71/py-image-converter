@@ -18,6 +18,7 @@ from PySide6.QtWidgets import QComboBox, QGroupBox  # noqa: E402
 
 from converter.types import (  # noqa: E402
     MAX_ATARI_COLORS,
+    AspectMode,
     ConversionConfig,
     DitherMethod,
     ExportFormat,
@@ -27,6 +28,7 @@ from converter.types import (  # noqa: E402
 )
 from converter_gui.limits import MAX_PNG_COLORS  # noqa: E402
 from converter_gui.widgets.parameter_panel import (  # noqa: E402
+    ASPECT_GROUP_TITLE,
     ATARI_GROUP_TITLE,
     ATARI_REGISTER_COUNT,
     DITHER_SECTIONS,
@@ -74,7 +76,15 @@ def test_the_documented_groups_exist(qtbot) -> None:
 
     titles = {group.title() for group in panel.findChildren(QGroupBox)}
 
-    assert {"Output", "Resize", "Sharpen", "Palette", "Dithering", "Quantization"} <= titles
+    assert {
+        "Output",
+        ASPECT_GROUP_TITLE,
+        "Resize",
+        "Sharpen",
+        "Palette",
+        "Dithering",
+        "Quantization",
+    } <= titles
     assert ATARI_GROUP_TITLE in titles
 
 
@@ -88,6 +98,7 @@ def test_round_trip_of_the_whole_configuration(qtbot) -> None:
         dither=DitherMethod.STUCKI,
         quantizer=QuantizerMethod.WEIGHTED,
         resize=ResizeMethod.BICUBIC,
+        aspect=AspectMode.CROP,
         sharpen=True,
         sharpen_strength=2.5,
         background_index=42,

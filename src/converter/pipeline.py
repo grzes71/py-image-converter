@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from converter.aspect import apply_geometry
 from converter.dithering import apply_dithering
 from converter.edge_detect import detect_edges
 from converter.exporters.asm_export import export_asm
@@ -17,7 +18,6 @@ from converter.metrics import compute_metrics, format_metrics
 from converter.palette import palette_rgb, select_palette
 from converter.preview import generate_previews
 from converter.quantizer import indexed_to_rgb, quantize
-from converter.resize import resize_image
 from converter.sharpen import apply_sharpen
 from converter.types import (
     ConversionConfig,
@@ -33,9 +33,14 @@ from converter.types import (
 
 
 def prepare_image(image: RGBImage, config: ConversionConfig) -> RGBImage:
-    """Resize and optionally sharpen the source image."""
-    resized = resize_image(image, config.width, config.height, config.resize)
-    return apply_sharpen(resized, config.sharpen, config.sharpen_strength)
+    """Fit the source into the target grid and optionally sharpen it.
+
+    The geometry stage runs first (``converter.aspect``): the PAL pixel aspect correction decides
+    which part of the source reaches the palette and dithering stages, and the margins it adds are
+    part of the converted image, so the order is not incidental.
+    """
+    fitted = apply_geometry(image, config)
+    return apply_sharpen(fitted, config.sharpen, config.sharpen_strength)
 
 
 def choose_palette(image: RGBImage, config: ConversionConfig) -> list[int]:

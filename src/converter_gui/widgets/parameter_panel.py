@@ -35,9 +35,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from converter.aspect import pal_screen, pixel_aspect_for
 from converter.config import validate_config
 from converter.types import (
     MAX_ATARI_COLORS,
+    AspectMode,
     ConversionConfig,
     DitherMethod,
     ExportFormat,
@@ -45,6 +47,7 @@ from converter.types import (
     QuantizerMethod,
     ResizeMethod,
 )
+
 from converter_gui.limits import MAX_PNG_COLORS
 from converter_gui.targets import (
     ALL_TARGETS,
@@ -55,12 +58,36 @@ from converter_gui.targets import (
     match_target,
 )
 
-_EnumT = TypeVar("_EnumT", ResizeMethod, PaletteMethod, QuantizerMethod, DitherMethod)
+_EnumT = TypeVar("_EnumT", ResizeMethod, PaletteMethod, QuantizerMethod, DitherMethod, AspectMode)
 
 MIN_WIDTH, MAX_WIDTH = 8, 640
 MIN_HEIGHT, MAX_HEIGHT = 8, 480
 MIN_STRENGTH, MAX_STRENGTH = 0.0, 5.0
 MIN_BACKGROUND, MAX_BACKGROUND = 0, 255
+MAX_PIXEL_ASPECT = 4.00
+"""Upper bound of the explicit pixel aspect field (0.00 means "not set")."""
+
+ASPECT_GROUP_TITLE = "Aspect Ratio Correction"
+
+#: The three correction modes with the hint shown in the combo's tooltip. The wording says what the
+#: implementation does; nothing here describes a mode the engine does not have.
+ASPECT_CHOICES: tuple[tuple[AspectMode, str, str], ...] = (
+    (
+        AspectMode.DISABLED,
+        "Disabled",
+        "Stretch the whole image onto the target grid - the previous behaviour, no correction",
+    ),
+    (
+        AspectMode.FIT,
+        "Preserve Aspect Ratio (Fit)",
+        "Keep the whole image and fill the margins with the background colour",
+    ),
+    (
+        AspectMode.CROP,
+        "Preserve Aspect Ratio (Crop)",
+        "Fill the target grid completely and trim the image where it overflows",
+    ),
+)
 
 ATARI_REGISTER_COUNT = 5
 """The exporters read ``atari_colors[:5]`` (COLOR0..COLOR4), so the panel edits exactly five."""
@@ -174,6 +201,8 @@ class ParameterPanel(QWidget):
             width=self.width_spin.value(),
             height=self.height_spin.value(),
             resize=self._selected(self.resize_combo, ResizeMethod),
+            aspect=self._selected(self.aspect_combo, AspectMode),
+            pixel_aspect=self._pixel_aspect_override(),
             sharpen=self.sharpen_check.isChecked(),
             sharpen_strength=self.sharpen_strength_spin.value(),
             palette=self._selected(self.palette_combo, PaletteMethod),
@@ -229,6 +258,7 @@ class ParameterPanel(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self._build_output_group())
+        layout.addWidget(self._build_aspect_group())
         layout.addWidget(self._build_resize_group())
         layout.addWidget(self._build_sharpen_group())
         layout.addWidget(self._build_palette_group())
@@ -264,6 +294,35 @@ class ParameterPanel(QWidget):
         size_layout.addWidget(self.height_spin)
         size_layout.addStretch(1)
         form.addRow("Size", size_row)
+        return group
+
+    def _build_aspect_group(self) -> QGroupBox:
+        group = QGroupBox(ASPECT_GROUP_TITLE, self)
+        form = QFormLayout(group)
+
+        self.aspect_combo = QComboBox(group)
+        for mode, label, hint in ASPECT_CHOICES:
+            self.aspect_combo.addItem(label, mode.value)
+            self.aspect_combo.setItemData(
+                self.aspect_combo.count() - 1, hint, Qt.ItemDataRole.ToolTipRole
+            )
+        self.aspect_combo.currentIndexChanged.connect(self._on_aspect_changed)
+        form.addRow("Correction", self.aspect_combo)
+
+        self.pixel_aspect_spin = QDoubleSpinBox(group)
+        self.pixel_aspect_spin.setRange(0.0, MAX_PIXEL_ASPECT)
+        self.pixel_aspect_spin.setSingleStep(0.01)
+        self.pixel_aspect_spin.setDecimals(2)
+        self.pixel_aspect_spin.setSpecialValueText("not set")
+        self.pixel_aspect_spin.setToolTip(
+            "Width/height of one pixel; a preset uses its PAL value, a Custom size needs it here"
+        )
+        self.pixel_aspect_spin.valueChanged.connect(self._on_pixel_aspect_changed)
+        form.addRow("Pixel aspect", self.pixel_aspect_spin)
+
+        self.aspect_hint = QLabel(group)
+        self.aspect_hint.setWordWrap(True)
+        form.addRow(self.aspect_hint)
         return group
 
     def _build_resize_group(self) -> QGroupBox:
@@ -399,6 +458,9 @@ class ParameterPanel(QWidget):
             self.width_spin.setValue(cfg.width)
             self.height_spin.setValue(cfg.height)
             self._select_data(self.resize_combo, cfg.resize)
+            self._select_data(self.aspect_combo, cfg.aspect)
+            self.pixel_aspect_spin.setValue(self._displayed_pixel_aspect(cfg))
+
             self.sharpen_check.setChecked(cfg.sharpen)
             self.sharpen_strength_spin.setValue(cfg.sharpen_strength)
             self._select_data(self.palette_combo, cfg.palette)
@@ -418,6 +480,9 @@ class ParameterPanel(QWidget):
         custom = self.selected_target.is_custom
         self.width_spin.setEnabled(custom)
         self.height_spin.setEnabled(custom)
+        self.pixel_aspect_spin.setEnabled(
+            custom and self._selected(self.aspect_combo, AspectMode) is not AspectMode.DISABLED
+        )
         self.sharpen_strength_spin.setEnabled(self.sharpen_check.isChecked())
         self.quantizer_combo.setEnabled(
             self._selected(self.dither_combo, DitherMethod) is DitherMethod.NONE
@@ -425,6 +490,7 @@ class ParameterPanel(QWidget):
         use_converter_palette = self.atari_palette_check.isChecked()
         for spin in self.atari_color_spins:
             spin.setEnabled(not use_converter_palette)
+        self._update_aspect_hint()
 
     def _effective_png_only(self) -> bool:
         """Explicit flag if set, otherwise derived from the carried export formats."""
@@ -449,6 +515,47 @@ class ParameterPanel(QWidget):
             return None
         return [spin.value() for spin in self.atari_color_spins]
 
+    def _pixel_aspect_override(self) -> float | None:
+        """Explicit PAL pixel aspect, which only a Custom size can carry.
+
+        A preset always resolves its factor from :data:`converter.aspect.PAL_SCREENS`, so switching
+        between ANTIC D/E/F really does change the value instead of leaving a stale copy behind.
+        """
+        if not self.selected_target.is_custom:
+            return None
+        value = round(self.pixel_aspect_spin.value(), 2)
+        return value if value > 0.0 else None
+
+    @staticmethod
+    def _displayed_pixel_aspect(cfg: ConversionConfig) -> float:
+        """The factor to show in the spin box (``0.0`` when nothing is known or set)."""
+        factor = pixel_aspect_for(cfg.width, cfg.height, cfg.pixel_aspect)
+        return 0.0 if factor is None else factor
+
+    def _update_aspect_hint(self) -> None:
+        """Say what the selected mode does with the current size, without guessing a factor."""
+        mode = self._selected(self.aspect_combo, AspectMode)
+        if mode is AspectMode.DISABLED:
+            self.aspect_hint.setText(
+                "The image is stretched onto the whole target grid - no proportions are preserved."
+            )
+            return
+        width = self.width_spin.value()
+        height = self.height_spin.value()
+        pixel_aspect = pixel_aspect_for(width, height, self._pixel_aspect_override())
+        if pixel_aspect is None:
+            self.aspect_hint.setText(
+                f"No PAL pixel aspect is known for {width}×{height}: the correction stays off. "
+                "Pick a preset or set the pixel aspect above."
+            )
+            return
+        screen = pal_screen(width, height)
+        source = f"{screen.name}, " if screen is not None else ""
+        self.aspect_hint.setText(
+            f"PAL pixel aspect {pixel_aspect:g}:1 ({source}{width}×{height}). "
+            "The result preview shows it at this shape."
+        )
+
     # --- slots ----------------------------------------------------------
 
     def _on_target_changed(self, *_: object) -> None:
@@ -459,12 +566,18 @@ class ParameterPanel(QWidget):
                 self.width_spin.setValue(updated.width)
                 self.height_spin.setValue(updated.height)
                 self.colors_spin.setValue(updated.colors)
+                # The factor follows the target, it is never carried over from another geometry.
+                self.pixel_aspect_spin.setValue(target.pixel_aspect or 0.0)
         self._refresh_enabled_states()
         self._emit()
 
     def _on_size_changed(self, *_: object) -> None:
+        """A custom size starts with its table factor, or with none at all - never a stale one."""
         with self._signals_blocked():
             self._select_target(CUSTOM)
+            self.pixel_aspect_spin.setValue(
+                pixel_aspect_for(self.width_spin.value(), self.height_spin.value()) or 0.0
+            )
         self._refresh_enabled_states()
         self._emit()
 
@@ -474,6 +587,14 @@ class ParameterPanel(QWidget):
 
     def _on_dither_changed(self, *_: object) -> None:
         self._refresh_enabled_states()
+        self._emit()
+
+    def _on_aspect_changed(self, *_: object) -> None:
+        self._refresh_enabled_states()
+        self._emit()
+
+    def _on_pixel_aspect_changed(self, *_: object) -> None:
+        self._update_aspect_hint()
         self._emit()
 
     def _on_atari_mode_toggled(self, *_: object) -> None:
@@ -540,6 +661,8 @@ class ParameterPanel(QWidget):
             self.target_combo,
             self.width_spin,
             self.height_spin,
+            self.aspect_combo,
+            self.pixel_aspect_spin,
             self.resize_combo,
             self.sharpen_check,
             self.sharpen_strength_spin,
