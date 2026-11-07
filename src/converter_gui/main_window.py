@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
 
 import converter
 from converter.aspect import preview_pixel_aspect
+from converter.hardware_colors import HardwareFrame, HardwareFrameRenderer
 from converter.image_loader import SUPPORTED_EXTENSIONS
 from converter.types import ConversionConfig, ExportFormat
 from converter_gui.controllers.conversion_controller import (
@@ -120,6 +121,8 @@ class MainWindow(QMainWindow):
         self._closing = False
         self._shutdown_result: bool | None = None
         self._banner_text = ""
+        self._frame_renderer = HardwareFrameRenderer()
+        self._frame: HardwareFrame | None = None
 
         self.setWindowTitle(WINDOW_TITLE)
         self.resize(*INITIAL_SIZE)
@@ -376,6 +379,7 @@ class MainWindow(QMainWindow):
         controller.export_requested.connect(self._on_export_requested)
         controller.state_changed.connect(self._refresh_state)
         self.parameter_panel.config_changed.connect(controller.set_config)
+        self.parameter_panel.config_changed.connect(self._on_config_changed)
 
     # --- user requests --------------------------------------------------
 
@@ -540,9 +544,11 @@ class MainWindow(QMainWindow):
         if self._closing:
             return
         result = displayed.result
+        frame = self._frame_renderer.frame(result, self._controller.requested_config)
+        self._frame = frame
         self.preview.set_image_pair(
             ndarray_to_qimage(result.source_resized),
-            ndarray_to_qimage(result.converted_rgb),
+            ndarray_to_qimage(frame.rgb if frame is not None else result.converted_rgb),
             secondary_aspect=preview_pixel_aspect(displayed.config),
         )
         self.metrics_panel.set_result(result)
@@ -553,6 +559,32 @@ class MainWindow(QMainWindow):
         )
         self.hide_error_banner()
         self._refresh_state()
+
+    def _on_config_changed(self, config: ConversionConfig) -> None:
+        """Re-render ``Atari result`` when the export settings changed the hardware colours.
+
+        Register edits and the *Use converter palette* switch are export-only: they must show up
+        immediately, without waiting for (or triggering) another conversion. A change that leaves the
+        bitmap, the mode and the registers alone hits the renderer's cache and redraws nothing.
+        """
+        if self._closing:
+            return
+        self._refresh_hardware_preview()
+
+    def _refresh_hardware_preview(self) -> None:
+        """Put the current hardware frame of the displayed result on screen (if it changed)."""
+        displayed = self._controller.displayed
+        if displayed is None:
+            return
+        frame = self._frame_renderer.frame(displayed.result, self._controller.requested_config)
+        if frame is None or frame is self._frame:
+            return  # no ANTIC mode for this size, or the very same pixels are already shown
+        self._frame = frame
+        self.preview.set_image_pair(
+            ndarray_to_qimage(displayed.result.source_resized),
+            ndarray_to_qimage(frame.rgb),
+            secondary_aspect=preview_pixel_aspect(displayed.config),
+        )
 
     def _on_source_loaded(self, generation: int, identity: object) -> None:
         if self._closing:

@@ -131,8 +131,11 @@ load Qt.
 - **Previews**: the resized source and the Atari result side by side, zoomed in 1×/2×/4×/8× steps
   (`Ctrl`+wheel also zooms), panned by dragging, with both views kept in sync. *Fit* scales the image into
   the window; a newly opened image is fitted, while later conversions keep the zoom and position you chose.
-  With the aspect ratio correction on, the result view also shows the non-square pixels of the selected
-  mode, so it looks the way it will look on a PAL monitor; the source view stays at square pixels.
+  The result view is the **hardware interpretation of the bitmap**: every pixel value is drawn with the
+  colour of the GTIA register it selects (`COLBK`, `COLPF0`-`COLPF2`) from the measured PAL palette, in
+  the pixel shape of the selected mode (see [Hardware colour registers](#hardware-colour-registers-xex-and-asm-exports)).
+  It is what the exported `.xex` will show - no scanlines, no blur, no extra dithering, nearest-neighbour
+  zoom; the source view keeps its square pixels and the untouched resized image.
 - **Conversions**: *Auto-update* (on by default, 300 ms debounce) reconverts after each parameter change;
   switch it off to convert only when you press *Convert* (`Ctrl+Return`). The badge above the previews and
   the status bar name the state - `ready (gen N)`, `stale - showing gen M`, `updating… (gen N)` or
@@ -202,6 +205,8 @@ and the last folder is remembered for the session.
   result matches what the hardware can display.
 - Only PAL is modelled (no PAL/NTSC switch), and a *Custom* size needs an explicit pixel aspect before the
   correction does anything - the panel says so instead of guessing a factor.
+- A *Custom* size that matches no ANTIC mode cannot be exported as `.xex`; the *Atari result* view then
+  falls back to the converter's own palette colours, because there is no hardware interpretation to show.
 
 Implementation details and the responsiveness measurements live in
 [docs/GUI_IMPLEMENTATION_PLAN.md](docs/GUI_IMPLEMENTATION_PLAN.md) and
@@ -219,9 +224,14 @@ cannot show anything without those values, which is why the exporters always wri
   nearest measured PAL colour with the CIE94 match of the `rgb2a8` tool and shows the result in the
   section, so what you see is what the `.xex` contains.
 - Clearing the checkbox makes the fields editable; those values are written as they are and are never
-  overwritten by a new conversion.
+  overwritten by a new conversion. The *Atari result* view follows both cases immediately - it is
+  rendered from exactly these registers, so editing a colour redraws the picture without reconverting.
 - The CLI does the same through `--atari-colors` (override) or a JSON configuration; without either
   the registers follow the converted palette.
+
+The data formats keep the converter's own colours (a `.png` is an image file, not a screen): only the
+`.xex` viewer, which has to produce the picture on the Atari, and the `Atari result` preview speak in
+hardware colours.
 
 `COLOR0` .. `COLOR4` are the OS shadows of `COLPF0`, `COLPF1`, `COLPF2`, `COLPF3` and `COLBK`. Which
 palette colour lands where depends on the mode (`docs/XEX_COLOR_REGISTERS.md`):
@@ -360,7 +370,7 @@ py-image-converter/
     │   ├── resize.py          # Nearest, Bilinear, Bicubic, Lanczos methods
     │   ├── sharpen.py         # Unsharp masking post-processing
     │   ├── histogram.py       # RGB/HSV/Luminance histogram & variance analyser
-    │   ├── hardware_colors.py # COLOR0-COLOR4 arrangement for the XEX/ASM exports
+    │   ├── hardware_colors.py # COLOR0-4 arrangement and the hardware frame renderer
     │   ├── edge_detect.py     # Edge detection (Sobel, Laplacian)
     │   ├── palette.py         # 4-color palette generation (Popularity, Kmeans, Octree, etc.)
     │   ├── atari_palette.py   # Full Atari hardware palette with color specs

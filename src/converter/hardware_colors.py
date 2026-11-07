@@ -41,11 +41,16 @@ conversion, a cache key or a golden image file.
 
 from __future__ import annotations
 
+import hashlib
+from collections import OrderedDict
 from collections.abc import Sequence
+from dataclasses import dataclass
+
+import numpy as np
 
 from converter import atari_palette
-from converter.atari_match import nearest_hardware_colors
-from converter.types import ConversionConfig, ConversionResult
+from converter.atari_match import PAL_RGB, nearest_hardware_colors
+from converter.types import ConversionConfig, ConversionResult, IndexedImage, RGBImage
 
 REGISTER_COUNT = 5
 """``COLOR0`` .. ``COLOR4`` - the five shadows the XEX init routine writes."""
@@ -67,6 +72,17 @@ ANTIC_MODE_ALIASES: dict[str, str] = {
 
 _MODE_CAPACITY: dict[str, int] = {"D": 4, "E": 4, "F": 2}
 """How many independent colours the mode can display (``COLPF3`` is not a playfield colour)."""
+
+PIXEL_COLOR_REGISTERS: dict[str, tuple[int, ...]] = {
+    "D": (4, 0, 1, 2),
+    "E": (4, 0, 1, 2),
+}
+"""``COLOR`` index every bitmap value selects in modes D and E (§7.1).
+
+Value 0 shows ``COLBK``, 1 ``COLPF0``, 2 ``COLPF1`` and 3 ``COLPF2``. The table is used in both
+directions: :func:`arrange_registers` fills the registers from it and :func:`pixel_colors` reads the
+displayed colour back through it, so the export and the preview cannot disagree.
+"""
 
 
 def mode_for_size(width: int, height: int) -> str:
@@ -121,10 +137,11 @@ def arrange_registers(colors: Sequence[int], mode: str) -> list[int]:
         registers[4] = background  # COLOR4 -> COLBK stays the border colour
         return registers
 
-    registers[4] = palette[0]  # COLOR4 -> COLBK, pixel value 0 and the border
-    registers[0] = palette[1]  # COLOR0 -> COLPF0, pixel value 1
-    registers[1] = palette[2]  # COLOR1 -> COLPF1, pixel value 2
-    registers[2] = palette[3]  # COLOR2 -> COLPF2, pixel value 3
+    four_colour = PIXEL_COLOR_REGISTERS.get(mode)
+    if four_colour is None:
+        raise ValueError(f"unknown ANTIC mode {mode!r}; expected one of D, E, F")
+    for value, register in enumerate(four_colour):
+        registers[register] = palette[value]
     return registers
 
 
@@ -164,3 +181,112 @@ def resolved_registers(
     height, width = result.indexed.shape
     mode = resolve_antic_mode(antic_mode, width, height)
     return derived_registers(result.palette_rgb, mode)
+
+
+# --- what the hardware displays ----------------------------------------
+
+
+def pixel_colors(registers: Sequence[int], mode: str) -> tuple[int, ...]:
+    """The hardware colour byte every bitmap value displays, in pixel-value order.
+
+    This is the reading direction of the very same rule :func:`arrange_registers` uses for writing,
+    so an exported file and this frame show the same thing by construction:
+
+    * modes D/E: value ``k`` shows ``COLOR`` ``PIXEL_COLOR_REGISTERS["E"][k]`` (0 -> ``COLBK``,
+      1-3 -> ``COLPF0``-``COLPF2``);
+    * mode F: value 0 shows ``COLPF2`` (its hue *and* luminance), value 1 shows the hue of ``COLPF2``
+      with the luminance of ``COLPF1`` - the two-luminance limitation of the mode itself.
+    """
+    padded = pad_registers(registers)
+    if mode == "F":
+        hue = padded[2] & 0xF0
+        return (padded[2], hue | (padded[1] & 0x0F))
+    four_colour = PIXEL_COLOR_REGISTERS.get(mode)
+    if four_colour is None:
+        raise ValueError(f"unknown ANTIC mode {mode!r}; expected one of D, E, F")
+    return tuple(padded[register] for register in four_colour)
+
+
+def render_hardware_frame(indexed: IndexedImage, registers: Sequence[int], mode: str) -> RGBImage:
+    """RGB frame of the bitmap as the GTIA colours display it (no scaling, no smoothing).
+
+    Every bitmap value is passed through the same mask the packers in the XEX exporter apply
+    (``& 3`` for 2bpp modes, ``& 1`` for ANTIC F), so a result with more colours than the mode can
+    hold renders as the hardware would see it packed. The returned array is a fresh ``uint8``
+    ``(H, W, 3)`` image; the inputs are never modified.
+    """
+    colours = pixel_colors(registers, mode)
+    table = np.array([PAL_RGB[index] for index in colours], dtype=np.uint8)
+    values = np.asarray(indexed, dtype=np.uint8) & (len(colours) - 1)
+    return table[values]
+
+
+@dataclass(frozen=True)
+class HardwareFrame:
+    """What ``Atari result`` shows: the mode, the registers and the RGB frame they produce."""
+
+    mode: str
+    registers: tuple[int, ...]
+    rgb: RGBImage
+
+
+class HardwareFrameRenderer:
+    """Turns a result plus the export settings into the frame the hardware would display.
+
+    Owns a small LRU keyed by the bitmap content, the mode and the registers, so the repeated calls a
+    GUI makes (a register edit, a checkbox toggle, an unrelated parameter change) reuse the last
+    render instead of recomputing it. Pure NumPy, no Qt and no global state: one renderer belongs to
+    one owner, like the conversion engine does.
+
+    ``frame()`` returns ``None`` when the screen size has no ANTIC mode: such a result cannot be
+    exported as an executable at all, so there is no hardware display to show.
+    """
+
+    def __init__(self, capacity: int = 4) -> None:
+        if capacity < 1:
+            raise ValueError(f"capacity must be >= 1 (got {capacity})")
+        self._capacity = capacity
+        self._items: OrderedDict[tuple, HardwareFrame] = OrderedDict()
+
+    def frame(
+        self,
+        result: ConversionResult,
+        config: ConversionConfig,
+        antic_mode: str | None = None,
+    ) -> HardwareFrame | None:
+        """The hardware frame of ``result`` for the colours ``config`` would export."""
+        height, width = result.indexed.shape
+        try:
+            mode = resolve_antic_mode(antic_mode, width, height)
+        except ValueError:
+            return None
+        registers = tuple(resolved_registers(result, config, mode))
+        key = _frame_key(result.indexed, registers, mode)
+        cached = self._items.get(key)
+        if cached is not None:
+            self._items.move_to_end(key)
+            return cached
+
+        frame = HardwareFrame(
+            mode=mode,
+            registers=registers,
+            rgb=render_hardware_frame(result.indexed, registers, mode),
+        )
+        self._items[key] = frame
+        self._items.move_to_end(key)
+        while len(self._items) > self._capacity:
+            self._items.popitem(last=False)
+        return frame
+
+    def clear(self) -> None:
+        """Forget every rendered frame."""
+        self._items.clear()
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+
+def _frame_key(indexed: IndexedImage, registers: Sequence[int], mode: str) -> tuple:
+    """Cache key of a frame: the bitmap bytes, the mode and the five register values."""
+    digest = hashlib.blake2b(indexed.tobytes(), digest_size=16).digest()
+    return (indexed.shape, digest, mode, tuple(registers))
