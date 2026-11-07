@@ -247,7 +247,7 @@ def test_the_hardware_frame_is_shown_with_the_pal_aspect(qtbot) -> None:
     _deliver(window, ConversionConfig(width=WIDTH, height=HEIGHT, aspect=AspectMode.FIT))
 
     assert window._frame.rgb.shape == (HEIGHT, WIDTH, 3), "the renderer never scales"
-    assert _aspect_ratio(window) == pytest.approx(2.08)  # ANTIC E, PAL
+    assert _aspect_ratio(window) == pytest.approx(1.86, abs=0.01)  # ANTIC E, PAL
     source, _result = window.preview.views
     assert source.transform().m11() / source.transform().m22() == pytest.approx(1.0)
 
@@ -259,7 +259,7 @@ def test_the_aspect_survives_every_zoom_level(level: float, qtbot) -> None:
 
     window.preview.set_zoom(level)
 
-    assert _aspect_ratio(window) == pytest.approx(2.08)
+    assert _aspect_ratio(window) == pytest.approx(1.86, abs=0.01)
 
 
 def test_the_geometry_does_not_depend_on_the_colours(qtbot) -> None:
@@ -308,4 +308,6 @@ def test_antic_d_uses_its_own_aspect(qtbot) -> None:
 
     assert window._frame.mode == "D"
     assert window._frame.rgb.shape == (96, 160, 3)
-    assert _aspect_ratio(window) == pytest.approx(1.04), "ANTIC D has half the pixel width of E"
+    assert _aspect_ratio(window) == pytest.approx(0.93, abs=0.01), (
+        "ANTIC D doubles every line, so its pixels are half as wide as ANTIC E's"
+    )

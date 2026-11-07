@@ -144,17 +144,23 @@ load Qt.
 - **Diagnostics**: the *Metrics* and *Stage timings* sections start collapsed and open on a click; *Copy*
   puts the whole report (metrics plus per-stage timings) on the clipboard.
 
-### PAL aspect ratio correction
+### PAL aspect ratio and the preview geometry
 
 Atari pixels are not square, so stretching an image onto the target grid changes the proportions of
-everything in it. The *Aspect Ratio Correction* section fixes that before any colour work happens, using
-the pixel aspect ratio of the selected mode (Altirra Hardware Reference Manual, "Pixel Aspect Ratios"):
+everything in it. Two independent things use the same table, and both were measured by rendering an
+exported `.xex` in PAL Altirra and reading the emulator's display rectangle (336×240 output shown in a
+1.3:1 box, see the comment in `converter/aspect.py`):
 
-| Mode | Grid | Pixel aspect (PAL) |
-| :--- | ---: | ---: |
-| ANTIC D | 160 × 96 | 1.04 : 1 |
-| ANTIC E | 160 × 192 (and 160 × 190) | 2.08 : 1 |
-| ANTIC F | 320 × 192 | 1.04 : 1 |
+| Mode | Grid | Pixel aspect (PAL) | Whole picture |
+| :--- | ---: | ---: | ---: |
+| ANTIC D | 160 × 96 | 0.93 : 1 (lines doubled) | 1.55 : 1 |
+| ANTIC E | 160 × 192 (and 160 × 190) | 1.86 : 1 | 1.55 : 1 |
+| ANTIC F | 320 × 192 | 0.93 : 1 | 1.55 : 1 |
+
+Every mode covers the same physical area, so E and F pictures have the same proportions and D is simply
+half as tall. **The conversion setting and the preview are separate:** *Correction* decides how the
+source is fitted onto the grid, while the preview always draws the result with the pixel shape of the
+mode - so `Atari result` matches the emulator even with *Correction: Disabled*.
 
 - *Disabled* (the default) keeps the previous behaviour: the image is stretched onto the whole grid.
 - *Preserve Aspect Ratio (Fit)* keeps the whole image and fills the margins with the conversion's
@@ -162,9 +168,10 @@ the pixel aspect ratio of the selected mode (Altirra Hardware Reference Manual, 
 - *Preserve Aspect Ratio (Crop)* fills the grid and trims the image where it overflows.
 
 A *Custom* size has no hardware geometry, so the panel reports that the correction stays off until you
-enter a pixel aspect (or pick a preset). The same two settings are available to the CLI through a JSON
-configuration - `"aspect": "fit"` or `"crop"` plus an optional `"pixel_aspect": 1.5` - and are simply
-absent from a configuration that does not use them.
+enter a pixel aspect (or pick a preset); such a result is also drawn with square pixels, because no
+ANTIC mode displays it. The same settings are available to the CLI through a JSON configuration -
+`"aspect": "fit"` or `"crop"` plus an optional `"pixel_aspect": 1.5` - and are simply absent from a
+configuration that does not use them.
 
 ### Export
 

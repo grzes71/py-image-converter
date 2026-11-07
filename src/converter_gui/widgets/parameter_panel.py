@@ -646,7 +646,7 @@ class ParameterPanel(QWidget):
         screen = pal_screen(width, height)
         source = f"{screen.name}, " if screen is not None else ""
         self.aspect_hint.setText(
-            f"PAL pixel aspect {pixel_aspect:g}:1 ({source}{width}×{height}). "
+            f"PAL pixel aspect {pixel_aspect:.2f}:1 ({source}{width}×{height}). "
             "The result preview shows it at this shape."
         )
 

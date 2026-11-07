@@ -1,26 +1,35 @@
-"""PAL pixel aspect ratio correction (geometry stage).
+"""PAL pixel aspect ratio (geometry stage, and the shape the preview draws).
 
-Atari 8-bit pixels are not square. On a PAL screen a 160-wide ANTIC D/E pixel is roughly twice as
-wide as it is tall, while the 320-wide ANTIC F pixel is (nearly) square - see the "Pixel Aspect
-Ratios" chapter of the Altirra Hardware Reference Manual. Scaling a square-pixel image onto the
-target grid therefore changes the proportions of everything in it, and no single factor fixes all
-modes: the factor belongs to the mode, not to the converter.
+Atari 8-bit pixels are not square. This module owns the one table both places read: the conversion
+geometry (:func:`plan_geometry` - "which part of the source lands where on the target grid") and the
+preview (:func:`preview_pixel_aspect` - "how wide is one pixel when the result is displayed"). They are
+independent mechanisms that must agree, so they share the numbers here.
 
-This module owns the hardware facts (:data:`PAL_SCREENS`) and the geometry that follows from them.
-It is a pure NumPy module - no Qt, no I/O - and it lives in the core package so the CLI, the engine
-and the GUI all read the same table instead of repeating it.
+The numbers come from a measurement, not from a re-derivation: a PAL Altirra run of the exported XEX
+(docs/XEX_COLOR_REGISTERS.md documents the same emulator setup) renders the 336x240 Atari output into a
+1.3:1 rectangle and reports
 
-The correction runs before any colour work (palette selection, quantisation, dithering): it decides
-which part of the source reaches those stages, and the margins it adds are part of the converted
-image, so it cannot be moved later.
+    RenderFrame: rect=(131.3,21.0,1017.4,699.0) tex=(336,240)     -> 886.1 x 678.0, aspect 1.3069
 
-Two modes correct the geometry, and one keeps the historical behaviour:
+so one raster column is ``1.3 / (336/240) = 0.93`` of a raster line on screen. The Atari samples a
+160-wide mode with two columns per pixel and one line per pixel row (ANTIC mode D doubles every row,
+so its pixel is two lines tall), while the 320-wide mode F uses one column per pixel:
 
-``fit``       the whole source stays visible; the target grid gains background-coloured margins
-``crop``      the target grid is filled completely; the source loses outer rows/columns
-``disabled``  the source is stretched onto the whole target grid (the previous behaviour)
+==========================  =====================================  ==========
+mode                        pixel on screen                        PAR
+==========================  =====================================  ==========
+ANTIC D  (160x96)           2 columns x 2 lines (rows doubled)      0.93
+ANTIC E  (160x192, 160x190)  2 columns x 1 line                     1.86
+ANTIC F  (320x192)           1 column  x 1 line                     0.93
+==========================  =====================================  ==========
 
-Only PAL is modelled: NTSC uses different pixel clocks and is out of scope.
+All three therefore cover the same physical area (:attr:`PalScreen.display_aspect` is equal for every
+mode), which is why ANTIC E and ANTIC F pictures have identical proportions and ANTIC D is simply half
+as tall.
+
+The module is pure NumPy - no Qt, no I/O - so the CLI, the engine and the GUI read the same table.
+
+Only PAL is modelled: NTSC uses a different pixel clock and is out of scope.
 """
 
 from __future__ import annotations
@@ -34,13 +43,22 @@ from converter import atari_palette
 from converter.resize import resize_image
 from converter.types import AspectMode, ConversionConfig, RGBImage
 
+PAL_RASTER = (336, 240)
+"""Columns x lines of the PAL output the emulator produces, as measured in Altirra."""
+
+PAL_DISPLAY_ASPECT = 1.3
+"""Aspect (width/height) that output is displayed with - measured from Altirra's render rectangle."""
+
+_RASTER_COLUMN = PAL_DISPLAY_ASPECT / (PAL_RASTER[0] / PAL_RASTER[1])
+"""One raster column relative to one raster line on screen: ``1.3 / 1.4 = 0.93``."""
+
 
 @dataclass(frozen=True)
 class PalScreen:
     """One PAL screen geometry: the framebuffer grid and the width of its pixels.
 
-    ``pixel_aspect`` is the width/height ratio of a single pixel on screen: 2.08 for the 160-wide
-    ANTIC D/E modes and 1.04 for the 320-wide ANTIC F mode.
+    ``pixel_aspect`` is the width/height ratio of a single pixel on screen (see the module
+    docstring for how it is measured).
     """
 
     name: str
@@ -55,12 +73,15 @@ class PalScreen:
 
 
 PAL_SCREENS: tuple[PalScreen, ...] = (
-    PalScreen("ANTIC D", 160, 96, 1.04),
-    PalScreen("ANTIC E", 160, 192, 2.08),
+    # Two columns wide, two lines tall: ANTIC mode D doubles every scanline.
+    PalScreen("ANTIC D", 160, 96, _RASTER_COLUMN),
+    # Two columns wide, one line tall.
+    PalScreen("ANTIC E", 160, 192, 2 * _RASTER_COLUMN),
     # ANTIC E with the last two scanlines dropped: the size the BIN/ASM/DTA exporters accept. Fewer
     # rows do not change how wide a pixel is, so it keeps the ANTIC E factor.
-    PalScreen("ANTIC E (190 rows)", 160, 190, 2.08),
-    PalScreen("ANTIC F", 320, 192, 1.04),
+    PalScreen("ANTIC E (190 rows)", 160, 190, 2 * _RASTER_COLUMN),
+    # One column wide, one line tall.
+    PalScreen("ANTIC F", 320, 192, _RASTER_COLUMN),
 )
 """The single source of truth for the PAL pixel aspect ratios."""
 
@@ -96,16 +117,27 @@ def effective_pixel_aspect(config: ConversionConfig) -> float | None:
     return pixel_aspect_for(config.width, config.height, config.pixel_aspect)
 
 
-def preview_pixel_aspect(config: ConversionConfig) -> float:
-    """Pixel aspect to display a result with: ``1.0`` when the correction is off or not applicable.
+def preview_pixel_aspect(config: ConversionConfig, size: tuple[int, int] | None = None) -> float:
+    """Pixel aspect the *preview* must draw a result with.
 
-    ``disabled`` deliberately returns square pixels: the conversion is unchanged there, so the
-    preview must stay unchanged too. Every other mode shows the pixels with their real shape, which
-    is what makes the result look the way it will look on an Atari monitor.
+    This is mechanism B (how wide a hardware pixel is), not mechanism A (how the source was fitted
+    onto the grid): it therefore does **not** look at ``config.aspect``. Correcting the conversion
+    geometry and displaying non-square pixels are independent - with ``disabled`` the bitmap is a
+    stretched copy of the source, and the Atari still shows it with its own pixel shape, so the
+    preview has to apply the same factor or it stops matching the hardware.
+
+    ``size`` is the ``(width, height)`` of the result on screen; without it the configuration's size
+    is used. The result's own size is what the display depends on - a Custom grid may be on screen
+    while the panel already shows another target.
+
+    Returns ``1.0`` only when that size has no known geometry (a *Custom* grid without an explicit
+    pixel aspect): there is nothing to apply then, and the result has no hardware display at all.
     """
-    if config.aspect is AspectMode.DISABLED:
-        return 1.0
-    factor = effective_pixel_aspect(config)
+    if size is None:
+        width, height = config.width, config.height
+    else:
+        width, height = size
+    factor = pixel_aspect_for(width, height, config.pixel_aspect)
     return 1.0 if factor is None else factor
 
 

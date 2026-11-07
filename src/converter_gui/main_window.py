@@ -546,13 +546,15 @@ class MainWindow(QMainWindow):
         result = displayed.result
         frame = self._frame_renderer.frame(result, self._controller.requested_config)
         self._frame = frame
+        height, width = result.indexed.shape
         self.preview.set_image_pair(
             ndarray_to_qimage(result.source_resized),
             ndarray_to_qimage(frame.rgb if frame is not None else result.converted_rgb),
-            secondary_aspect=preview_pixel_aspect(displayed.config),
+            secondary_aspect=preview_pixel_aspect(
+                self._controller.requested_config, size=(width, height)
+            ),
         )
         self.metrics_panel.set_result(result)
-        height, width = result.indexed.shape
         self.parameter_panel.set_palette_colors(
             [tuple(int(channel) for channel in colour) for colour in result.palette_rgb],
             size=(width, height),
@@ -580,10 +582,13 @@ class MainWindow(QMainWindow):
         if frame is None or frame is self._frame:
             return  # no ANTIC mode for this size, or the very same pixels are already shown
         self._frame = frame
+        height, width = displayed.result.indexed.shape
         self.preview.set_image_pair(
             ndarray_to_qimage(displayed.result.source_resized),
             ndarray_to_qimage(frame.rgb),
-            secondary_aspect=preview_pixel_aspect(displayed.config),
+            secondary_aspect=preview_pixel_aspect(
+                self._controller.requested_config, size=(width, height)
+            ),
         )
 
     def _on_source_loaded(self, generation: int, identity: object) -> None:
