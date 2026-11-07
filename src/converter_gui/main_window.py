@@ -546,8 +546,10 @@ class MainWindow(QMainWindow):
             secondary_aspect=preview_pixel_aspect(displayed.config),
         )
         self.metrics_panel.set_result(result)
+        height, width = result.indexed.shape
         self.parameter_panel.set_palette_colors(
-            [tuple(int(channel) for channel in colour) for colour in result.palette_rgb]
+            [tuple(int(channel) for channel in colour) for colour in result.palette_rgb],
+            size=(width, height),
         )
         self.hide_error_banner()
         self._refresh_state()

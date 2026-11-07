@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from converter.exporters.atari_bin_export import pack_antic_e
+from converter.hardware_colors import GTIA_REGISTERS
 from converter.types import IndexedImage
 
 
@@ -15,7 +16,13 @@ def export_asm(
     load_address: int = 0x6000,
     atari_colors: list[int] | None = None,
 ) -> None:
-    """Export screen memory as ca65-compatible assembly."""
+    """Export screen memory as ca65-compatible assembly.
+
+    ``atari_colors`` are the ``COLOR0..COLOR4`` shadow bytes (``COLPF0, COLPF1, COLPF2, COLPF3,
+    COLBK``) and are only emitted when the caller provides them: the CLI writes this format without
+    colour data by default, and that output must not change. The XEX export is the one that always
+    needs the registers, because there the file itself has to produce the picture.
+    """
     path = Path(path)
     screen_data = pack_antic_e(indexed)
     h, w = indexed.shape
@@ -37,7 +44,7 @@ def export_asm(
         while len(colors) < 5:
             colors.append(0)
         lines.append("")
-        lines.append(f"; Color register values (COLBK, COLPF0-PF3)")
+        lines.append("; COLOR0-COLOR4 = " + ", ".join(GTIA_REGISTERS))
         lines.append(f"{label}_COLORS:")
         hex_colors = ", ".join(f"${c:02X}" for c in colors)
         lines.append(f"    .byte {hex_colors}")

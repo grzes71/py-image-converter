@@ -13,6 +13,7 @@ from converter.exporters.atari_dta_export import export_dta
 from converter.exporters.png_export import export_png
 from converter.exporters.xex_export import export_xex
 from converter.histogram import compute_local_variance
+from converter.hardware_colors import resolved_registers
 from converter.image_loader import load_image
 from converter.metrics import compute_metrics, format_metrics
 from converter.palette import palette_rgb, select_palette
@@ -143,10 +144,12 @@ def export_result(
         elif fmt == ExportFormat.XEX:
             p = parent / f"{stem}.xex"
             export_xex(
-                result.indexed, p,
+                result.indexed,
+                p,
                 palette_indices=result.palette_indices,
                 antic_mode=antic_mode,
-                atari_colors=config.atari_colors,
+                # Manual values win; otherwise they are derived from the converted palette (rgb2a8).
+                atari_colors=resolved_registers(result, config, antic_mode),
             )
             exported.append(p)
 

@@ -8,6 +8,7 @@ from pathlib import Path
 
 from converter.config import load_config, save_config
 from converter.exporters.xex_export import export_xex
+from converter.hardware_colors import resolved_registers
 from converter.pipeline import run_conversion
 from converter.types import (
     ConversionConfig,
@@ -81,7 +82,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--atari-colors",
         type=str,
         default=None,
-        help="Override color registers in XEX/ASM output (comma-separated hex, e.g. 0x00,0x04,0x0a,0x0e)",
+        help=(
+            "Override COLOR0-COLOR4 (COLPF0, COLPF1, COLPF2, COLPF3, COLBK) in XEX/ASM output "
+            "(comma-separated hex, e.g. 0x00,0x04,0x0a,0x0e); without it the registers follow "
+            "the converted palette"
+        ),
+
     )
     parser.add_argument(
         "--label-name",
@@ -178,7 +184,8 @@ def main(argv: list[str] | None = None) -> int:
             args.xex,
             palette_indices=result.palette_indices,
             antic_mode=args.antic_mode,
-            atari_colors=atari_colors,
+            # `--atari-colors` wins; without it the registers follow the converted palette.
+            atari_colors=resolved_registers(result, config, args.antic_mode),
         )
 
     return 0

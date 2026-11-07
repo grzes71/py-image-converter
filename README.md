@@ -96,7 +96,7 @@ Supported export formats:
 | `--export` | `png`, `bin`, `asm`, `dta`, `xex` (repeatable) | (inferred) | Export format. Repeat flag for multiple formats. |
 | `--xex`, `-x` | Path | None | Explicit output path for Atari executable preview (.xex). |
 | `--antic-mode`, `-m` | `D`, `E`, `F`, `7`, `15`, `8` | (auto) | ANTIC mode for XEX preview. |
-| `--atari-colors` | Comma-separated hex | None | Override color registers in XEX (e.g. `0x00,0x04,0x0a,0x0e`). |
+| `--atari-colors` | Comma-separated hex | None | Override `COLOR0-COLOR4` (`COLPF0, COLPF1, COLPF2, COLPF3, COLBK`) in XEX/ASM (e.g. `0x00,0x04,0x0a,0x0e`); without it the registers follow the converted palette. |
 | `--config` | Path | None | Path to a JSON configuration file to load settings. |
 | `--save-config` | Path | None | Path to save current pipeline settings as a JSON config file. |
 
@@ -126,8 +126,8 @@ load Qt.
 - **Open** an image with *File > Open* (`Ctrl+O`) or drop it onto the window (PNG, BMP, GIF, JPG).
 - **Parameters**: a target preset (ANTIC E 160×192 and 160×190, ANTIC D 160×96, ANTIC F 320×192, or
   *Custom*) plus width/height, aspect ratio correction, resize, sharpen and its strength, palette,
-  colours, background index, dithering, quantizer, and the five hardware colour registers (used by the
-  ASM/XEX exporters only).
+  colours, background index, dithering, quantizer, and the five hardware colour registers with their
+  *Use converter palette* switch (see [Hardware colour registers](#hardware-colour-registers-xex-and-asm-exports)).
 - **Previews**: the resized source and the Atari result side by side, zoomed in 1×/2×/4×/8× steps
   (`Ctrl`+wheel also zooms), panned by dragging, with both views kept in sync. *Fit* scales the image into
   the window; a newly opened image is fitted, while later conversions keep the zoom and position you chose.
@@ -206,6 +206,34 @@ and the last folder is remembered for the session.
 Implementation details and the responsiveness measurements live in
 [docs/GUI_IMPLEMENTATION_PLAN.md](docs/GUI_IMPLEMENTATION_PLAN.md) and
 [docs/GUI_PERFORMANCE.md](docs/GUI_PERFORMANCE.md).
+
+---
+
+## Hardware colour registers (XEX and ASM exports)
+
+The Atari has no RGB palette: a colour is a byte with a hue (high nibble) and a luminance (low nibble),
+so the RGB colours of a conversion have to be matched to the 256 hardware colours. The XEX viewer
+cannot show anything without those values, which is why the exporters always write them:
+
+- *Use converter palette* (the default in the GUI) maps every colour of the converted palette to the
+  nearest measured PAL colour with the CIE94 match of the `rgb2a8` tool and shows the result in the
+  section, so what you see is what the `.xex` contains.
+- Clearing the checkbox makes the fields editable; those values are written as they are and are never
+  overwritten by a new conversion.
+- The CLI does the same through `--atari-colors` (override) or a JSON configuration; without either
+  the registers follow the converted palette.
+
+`COLOR0` .. `COLOR4` are the OS shadows of `COLPF0`, `COLPF1`, `COLPF2`, `COLPF3` and `COLBK`. Which
+palette colour lands where depends on the mode (`docs/XEX_COLOR_REGISTERS.md`):
+
+| Mode | Palette colour 0 | 1 | 2 | 3 |
+| :--- | :--- | :--- | :--- | :--- |
+| ANTIC D / E | `COLOR4` (COLBK) | `COLOR0` (COLPF0) | `COLOR1` (COLPF1) | `COLOR2` (COLPF2) |
+| ANTIC F | `COLOR4` (COLBK, border) | `COLOR1` luminance | `COLOR2` hue + background luminance | – |
+
+Mode F can only display two luminances of one hue, so its mapping keeps the foreground hue and both
+luminances. The ASM export writes the same bytes, but only when they are configured explicitly - the
+screen data alone is the default output of that format.
 
 ---
 
@@ -324,6 +352,7 @@ py-image-converter/
     ├── converter/
     │   ├── main.py            # CLI argument parsing and configuration orchestration
     │   ├── aspect.py          # PAL pixel aspect ratio correction (geometry stage)
+    │   ├── atari_match.py     # RGB -> nearest measured Atari colour (rgb2a8 port)
     │   ├── config.py          # JSON configuration load/save utils
     │   ├── pipeline.py        # Pipeline execution workflow manager
     │   ├── types.py           # Shared data containers and types
@@ -331,6 +360,7 @@ py-image-converter/
     │   ├── resize.py          # Nearest, Bilinear, Bicubic, Lanczos methods
     │   ├── sharpen.py         # Unsharp masking post-processing
     │   ├── histogram.py       # RGB/HSV/Luminance histogram & variance analyser
+    │   ├── hardware_colors.py # COLOR0-COLOR4 arrangement for the XEX/ASM exports
     │   ├── edge_detect.py     # Edge detection (Sobel, Laplacian)
     │   ├── palette.py         # 4-color palette generation (Popularity, Kmeans, Octree, etc.)
     │   ├── atari_palette.py   # Full Atari hardware palette with color specs
