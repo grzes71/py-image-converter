@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
 )
 
 import converter
+from converter.aspect import preview_pixel_aspect
 from converter.image_loader import SUPPORTED_EXTENSIONS
 from converter.types import ConversionConfig, ExportFormat
 from converter_gui.controllers.conversion_controller import (
@@ -542,10 +543,13 @@ class MainWindow(QMainWindow):
         self.preview.set_image_pair(
             ndarray_to_qimage(result.source_resized),
             ndarray_to_qimage(result.converted_rgb),
+            secondary_aspect=preview_pixel_aspect(displayed.config),
         )
         self.metrics_panel.set_result(result)
+        height, width = result.indexed.shape
         self.parameter_panel.set_palette_colors(
-            [tuple(int(channel) for channel in colour) for colour in result.palette_rgb]
+            [tuple(int(channel) for channel in colour) for colour in result.palette_rgb],
+            size=(width, height),
         )
         self.hide_error_banner()
         self._refresh_state()

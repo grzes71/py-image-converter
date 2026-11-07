@@ -1,9 +1,11 @@
 """Named conversion targets (Q6, plan §6.2).
 
 A target is explicit GUI state on top of :class:`~converter.types.ConversionConfig`: it writes
-``width``/``height`` and caps ``colors``, and it supplies the default ANTIC mode and the pixel aspect
-that the preview and the export dialog need. ``AtariMode`` and the saved JSON are left alone, so a
-configuration produced here still round-trips through the CLI.
+``width``/``height`` and caps ``colors``, and it supplies the default ANTIC mode the export dialog
+starts with. The PAL pixel aspect is *not* stored here - it is looked up from
+:mod:`converter.aspect`, which owns the hardware facts, so the preview, the engine and this table
+cannot drift apart. ``AtariMode`` and the saved JSON are left alone, so a configuration produced
+here still round-trips through the CLI.
 
 The module is plain data plus pure helpers: no Qt, no engine, no I/O.
 """
@@ -12,6 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
+from converter.aspect import pal_screen
 from converter.types import MAX_ATARI_COLORS, ConversionConfig
 
 CUSTOM_LABEL = "Custom"
@@ -23,9 +26,8 @@ class TargetSpec:
     """One entry of the target combo.
 
     ``width``/``height`` are ``None`` for the Custom entry, whose size comes from the configuration.
-    ``max_colors`` is the hardware limit of the target (4 for the 2bpp modes, 2 for ANTIC F),
-    ``default_antic_mode`` is the XEX mode the export dialog starts with and ``pixel_aspect`` is the
-    display-only horizontal factor (2.0 for 160-wide ANTIC D/E pixels, 1.0 for 320-wide ANTIC F).
+    ``max_colors`` is the hardware limit of the target (4 for the 2bpp modes, 2 for ANTIC F) and
+    ``default_antic_mode`` is the XEX mode the export dialog starts with.
     """
 
     key: str
@@ -34,22 +36,33 @@ class TargetSpec:
     height: int | None
     max_colors: int
     default_antic_mode: str
-    pixel_aspect: float
 
     @property
     def is_custom(self) -> bool:
         """True for the editable entry."""
         return self.width is None or self.height is None
 
+    @property
+    def pixel_aspect(self) -> float | None:
+        """PAL pixel aspect of the target, from :data:`converter.aspect.PAL_SCREENS`.
+
+        ``None`` for the Custom entry: a size without a known geometry must not get an invented
+        factor (``ConversionConfig.pixel_aspect`` is the explicit way to correct such a size).
+        """
+        if self.width is None or self.height is None:
+            return None
+        screen = pal_screen(self.width, self.height)
+        return screen.pixel_aspect if screen is not None else None
+
 
 TARGETS: tuple[TargetSpec, ...] = (
-    TargetSpec("antic_e_192", "ANTIC E 160×192 (4 col)", 160, 192, MAX_ATARI_COLORS, "E", 2.0),
-    TargetSpec("antic_e_190", "ANTIC E 160×190 (4 col)", 160, 190, MAX_ATARI_COLORS, "E", 2.0),
-    TargetSpec("antic_d_96", "ANTIC D 160×96 (4 col)", 160, 96, MAX_ATARI_COLORS, "D", 2.0),
-    TargetSpec("antic_f_192", "ANTIC F 320×192 (2 col)", 320, 192, 2, "F", 1.0),
+    TargetSpec("antic_e_192", "ANTIC E 160×192 (4 col)", 160, 192, MAX_ATARI_COLORS, "E"),
+    TargetSpec("antic_e_190", "ANTIC E 160×190 (4 col)", 160, 190, MAX_ATARI_COLORS, "E"),
+    TargetSpec("antic_d_96", "ANTIC D 160×96 (4 col)", 160, 96, MAX_ATARI_COLORS, "D"),
+    TargetSpec("antic_f_192", "ANTIC F 320×192 (2 col)", 320, 192, 2, "F"),
 )
 
-CUSTOM = TargetSpec("custom", CUSTOM_LABEL, None, None, MAX_ATARI_COLORS, "E", 2.0)
+CUSTOM = TargetSpec("custom", CUSTOM_LABEL, None, None, MAX_ATARI_COLORS, "E")
 
 ALL_TARGETS: tuple[TargetSpec, ...] = (*TARGETS, CUSTOM)
 """Every combo entry, in display order; the Custom entry is last."""

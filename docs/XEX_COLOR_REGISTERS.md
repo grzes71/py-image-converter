@@ -1,11 +1,10 @@
 # XEX colour-register verification (plan task T0.3, defect B5)
 
-> **Status: investigation complete (diagnostics only — no fix implemented).**
-> B5 is **CONFIRMED** for ANTIC D/E (all playfield colours are shifted by one register) and
-> **separately for ANTIC F**, whose two-colour export cannot produce a visible picture at all —
-> but for a *different, partly design-level* reason (§7.2, §8.2).
-> No source code, test or golden file was changed. Emulator runs were performed exclusively through
-> the `altirra-bridge` skill; Atari800 and any other emulator/automation were not used.
+> **Status: fixed.** The register-order fix (§11.1, ANTIC D/E) and the mode-F strategy (§11.2,
+> option A) are implemented in `converter/hardware_colors.py`; the RGB → hardware colour mapping uses
+> the measured palette and the CIE94 match of the `rgb2a8` tool (`converter/atari_match.py`, see
+> `src/tests/test_atari_match.py`). The measurements and reasoning below are unchanged and remain the
+> reference for why the fix looks the way it does. `DRKMSK` masking (§11.5) is still not compensated.
 >
 > Date: 2026-11-06. Related: `docs/GUI_IMPLEMENTATION_PLAN.md` §3.3 (B5), T0.3, T6.1.
 > Every claim below is tagged **(a) measured**, **(b) hardware documentation** or **(c) decision**;

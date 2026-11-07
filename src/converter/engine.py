@@ -30,6 +30,7 @@ from converter.pipeline import (
     render_indexed,
 )
 from converter.types import (
+    AspectMode,
     ConversionConfig,
     ConversionResult,
     DitherMethod,
@@ -99,9 +100,18 @@ class _LRU:
 
 
 def _l1_key(config: ConversionConfig) -> tuple:
-    """Cache key of the prepared image and its edge mask."""
+    """Cache key of the prepared image and its edge mask.
+
+    The geometry fields are part of it: the PAL correction changes which pixels reach every later
+    stage, and an explicit pixel aspect only matters while the correction is on (otherwise the size
+    pair already identifies the resize).
+    """
     strength = round(config.sharpen_strength, 6) if config.sharpen else None
-    return (config.width, config.height, config.resize.value, config.sharpen, strength)
+    aspect = None
+    if config.aspect is not AspectMode.DISABLED:
+        explicit = round(config.pixel_aspect, 6) if config.pixel_aspect is not None else None
+        aspect = (config.aspect.value, explicit)
+    return (config.width, config.height, config.resize.value, config.sharpen, strength, aspect)
 
 
 def _palette_key(config: ConversionConfig) -> tuple:

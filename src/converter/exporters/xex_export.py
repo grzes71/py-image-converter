@@ -7,6 +7,11 @@ from pathlib import Path
 import numpy as np
 
 from converter.exporters.atari_bin_export import pack_antic_e
+from converter.hardware_colors import (
+    derived_registers_from_indices,
+    mode_for_size,
+    resolve_antic_mode,
+)
 from converter.types import IndexedImage
 
 _XEX_MAGIC = (0xFF, 0xFF)
@@ -15,15 +20,6 @@ _VRAM_ADDR = 0x4000
 _DLIST_ADDR = 0x3E00
 _INIT_ADDR = 0x3800
 _RUNAD_ADDR = 0x02E0
-
-_MODE_MAP: dict[str, str] = {
-    "D": "D",
-    "E": "E",
-    "F": "F",
-    "7": "D",
-    "15": "E",
-    "8": "F",
-}
 
 _MODE_BYTES: dict[str, int] = {
     "D": 0x0D,
@@ -116,16 +112,8 @@ def _pack_1bpp(
 
 
 def _infer_antic_mode(indexed: IndexedImage) -> str:
-    h, w = indexed.shape
-    if (h, w) == (96, 160):
-        return "D"
-    if w == 160:
-        return "E"
-    if w == 320:
-        return "F"
-    raise ValueError(
-        "Cannot infer ANTIC mode from image shape. Use --antic-mode with one of: D, E, F, 7, 15, 8."
-    )
+    height, width = indexed.shape
+    return mode_for_size(width, height)
 
 
 def normalize_antic_mode(antic_mode: str | None, indexed: IndexedImage) -> str:
@@ -135,12 +123,8 @@ def normalize_antic_mode(antic_mode: str | None, indexed: IndexedImage) -> str:
     BASIC aliases 7/15/8 (case-insensitive). Raises ``ValueError`` when the mode is invalid or cannot
     be inferred. Shared by the XEX exporter and the export-compatibility helper.
     """
-    if antic_mode is None:
-        return _infer_antic_mode(indexed)
-    normalized = _MODE_MAP.get(str(antic_mode).upper())
-    if normalized is None:
-        raise ValueError("Invalid ANTIC mode. Use one of: D, E, F, 7, 15, 8")
-    return normalized
+    height, width = indexed.shape
+    return resolve_antic_mode(antic_mode, width, height)
 
 
 def _build_dlist(
@@ -196,12 +180,20 @@ def _build_dlist(
 
 def _build_init_routine(
     palette_indices: list[int] | None,
+    mode: str,
     atari_colors: list[int] | None = None,
 ) -> bytearray:
+    """Machine code that sets the display list and the five colour shadows, then loops forever.
+
+    ``atari_colors`` are the final ``COLOR0..COLOR4`` bytes and are written verbatim
+    (:func:`converter.hardware_colors.resolved_registers`). Without them the colours come from
+    ``palette_indices``, which are converter-table positions and have to be translated through their
+    RGB values first - writing them raw is what produced the colours unrelated to the image.
+    """
     if atari_colors is not None:
         palette = list(atari_colors)[:5]
     else:
-        palette = list(palette_indices or [])[:5]
+        palette = derived_registers_from_indices(list(palette_indices or []), mode)[:5]
     while len(palette) < 5:
         palette.append(0)
 
@@ -270,7 +262,7 @@ def export_xex(
         vram_data = _pack_1bpp(indexed, width=w, height=h, pad_4kb=True)
 
     dlist = _build_dlist(mode, height=h, width=w, pad_4kb=True)
-    init_routine = _build_init_routine(palette_indices, atari_colors=atari_colors)
+    init_routine = _build_init_routine(palette_indices, mode, atari_colors=atari_colors)
 
     chunks = bytearray(_XEX_MAGIC)
     _append_segment(chunks, _VRAM_ADDR, vram_data)

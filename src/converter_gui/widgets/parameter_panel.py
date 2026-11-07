@@ -35,9 +35,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from converter.aspect import pal_screen, pixel_aspect_for
 from converter.config import validate_config
+from converter.hardware_colors import GTIA_REGISTERS, derived_registers, mode_for_size
 from converter.types import (
     MAX_ATARI_COLORS,
+    AspectMode,
     ConversionConfig,
     DitherMethod,
     ExportFormat,
@@ -45,6 +48,7 @@ from converter.types import (
     QuantizerMethod,
     ResizeMethod,
 )
+
 from converter_gui.limits import MAX_PNG_COLORS
 from converter_gui.targets import (
     ALL_TARGETS,
@@ -55,18 +59,53 @@ from converter_gui.targets import (
     match_target,
 )
 
-_EnumT = TypeVar("_EnumT", ResizeMethod, PaletteMethod, QuantizerMethod, DitherMethod)
+_EnumT = TypeVar("_EnumT", ResizeMethod, PaletteMethod, QuantizerMethod, DitherMethod, AspectMode)
 
 MIN_WIDTH, MAX_WIDTH = 8, 640
 MIN_HEIGHT, MAX_HEIGHT = 8, 480
 MIN_STRENGTH, MAX_STRENGTH = 0.0, 5.0
 MIN_BACKGROUND, MAX_BACKGROUND = 0, 255
+MAX_PIXEL_ASPECT = 4.00
+"""Upper bound of the explicit pixel aspect field (0.00 means "not set")."""
+
+ASPECT_GROUP_TITLE = "Aspect Ratio Correction"
+
+#: The three correction modes with the hint shown in the combo's tooltip. The wording says what the
+#: implementation does; nothing here describes a mode the engine does not have.
+ASPECT_CHOICES: tuple[tuple[AspectMode, str, str], ...] = (
+    (
+        AspectMode.DISABLED,
+        "Disabled",
+        "Stretch the whole image onto the target grid - the previous behaviour, no correction",
+    ),
+    (
+        AspectMode.FIT,
+        "Preserve Aspect Ratio (Fit)",
+        "Keep the whole image and fill the margins with the background colour",
+    ),
+    (
+        AspectMode.CROP,
+        "Preserve Aspect Ratio (Crop)",
+        "Fill the target grid completely and trim the image where it overflows",
+    ),
+)
 
 ATARI_REGISTER_COUNT = 5
 """The exporters read ``atari_colors[:5]`` (COLOR0..COLOR4), so the panel edits exactly five."""
 ATARI_REGISTER_MAX = 255
 
 ATARI_GROUP_TITLE = "Hardware colour registers (export only)"
+
+#: One line per mode explaining where the derived values end up; wording only, the rules live in
+#: :mod:`converter.hardware_colors`.
+_ATARI_LAYOUT_HINTS: dict[str | None, str] = {
+    "D": "ANTIC D: colour 0 → COLBK (COLOR4), colours 1-3 → COLPF0-COLPF2 (COLOR0-COLOR2).",
+    "E": "ANTIC E: colour 0 → COLBK (COLOR4), colours 1-3 → COLPF0-COLPF2 (COLOR0-COLOR2).",
+    "F": (
+        "ANTIC F: COLOR2 (COLPF2) carries the hue and the background luminance, "
+        "COLOR1 (COLPF1) the foreground luminance."
+    ),
+}
 
 #: Dithering methods grouped by family. The group names and hints describe what the implementations in
 #: :mod:`converter.dithering` do: ordered dithering compares against a repeating threshold matrix,
@@ -145,6 +184,8 @@ class ParameterPanel(QWidget):
         self._config = ConversionConfig()
         self._png_only: bool | None = None  # None = derive from the carried export formats
         self._palette_colors: list[tuple[int, int, int]] | None = None
+        self._palette_size: tuple[int, int] | None = None
+        self._manual_registers: list[int] = [0] * ATARI_REGISTER_COUNT
         self._build_ui()
         self._populate(self._config)
 
@@ -174,6 +215,8 @@ class ParameterPanel(QWidget):
             width=self.width_spin.value(),
             height=self.height_spin.value(),
             resize=self._selected(self.resize_combo, ResizeMethod),
+            aspect=self._selected(self.aspect_combo, AspectMode),
+            pixel_aspect=self._pixel_aspect_override(),
             sharpen=self.sharpen_check.isChecked(),
             sharpen_strength=self.sharpen_strength_spin.value(),
             palette=self._selected(self.palette_combo, PaletteMethod),
@@ -203,15 +246,27 @@ class ParameterPanel(QWidget):
         self._png_only = bool(png_only)
         self._apply_colors_limit()
 
-    def set_palette_colors(self, colors: Sequence[Sequence[int]] | None) -> None:
+    def set_palette_colors(
+        self,
+        colors: Sequence[Sequence[int]] | None,
+        *,
+        size: tuple[int, int] | None = None,
+    ) -> None:
         """Provide the palette of the current result so the background swatch can show its colour.
 
-        Without a palette the swatch stays neutral and explains why; the panel never guesses.
+        Without a palette the swatch stays neutral and explains why; the panel never guesses. The same
+        call refreshes the derived hardware registers, so they always describe the conversion that is
+        on screen. ``size`` is the ``(width, height)`` of that result: it decides the ANTIC mode of the
+        registers and therefore has to come from the result, not from the spin boxes (they may already
+        show newer settings).
         """
         self._palette_colors = (
             [tuple(int(channel) for channel in color[:3]) for color in colors] if colors else None
         )
+        self._palette_size = (int(size[0]), int(size[1])) if size is not None else None
         self._update_background_swatch()
+        self._apply_derived_registers()
+        self._update_atari_status()
 
     @property
     def background_color(self) -> QColor | None:
@@ -229,6 +284,7 @@ class ParameterPanel(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self._build_output_group())
+        layout.addWidget(self._build_aspect_group())
         layout.addWidget(self._build_resize_group())
         layout.addWidget(self._build_sharpen_group())
         layout.addWidget(self._build_palette_group())
@@ -264,6 +320,35 @@ class ParameterPanel(QWidget):
         size_layout.addWidget(self.height_spin)
         size_layout.addStretch(1)
         form.addRow("Size", size_row)
+        return group
+
+    def _build_aspect_group(self) -> QGroupBox:
+        group = QGroupBox(ASPECT_GROUP_TITLE, self)
+        form = QFormLayout(group)
+
+        self.aspect_combo = QComboBox(group)
+        for mode, label, hint in ASPECT_CHOICES:
+            self.aspect_combo.addItem(label, mode.value)
+            self.aspect_combo.setItemData(
+                self.aspect_combo.count() - 1, hint, Qt.ItemDataRole.ToolTipRole
+            )
+        self.aspect_combo.currentIndexChanged.connect(self._on_aspect_changed)
+        form.addRow("Correction", self.aspect_combo)
+
+        self.pixel_aspect_spin = QDoubleSpinBox(group)
+        self.pixel_aspect_spin.setRange(0.0, MAX_PIXEL_ASPECT)
+        self.pixel_aspect_spin.setSingleStep(0.01)
+        self.pixel_aspect_spin.setDecimals(2)
+        self.pixel_aspect_spin.setSpecialValueText("not set")
+        self.pixel_aspect_spin.setToolTip(
+            "Width/height of one pixel; a preset uses its PAL value, a Custom size needs it here"
+        )
+        self.pixel_aspect_spin.valueChanged.connect(self._on_pixel_aspect_changed)
+        form.addRow("Pixel aspect", self.pixel_aspect_spin)
+
+        self.aspect_hint = QLabel(group)
+        self.aspect_hint.setWordWrap(True)
+        form.addRow(self.aspect_hint)
         return group
 
     def _build_resize_group(self) -> QGroupBox:
@@ -370,7 +455,7 @@ class ParameterPanel(QWidget):
 
         self.atari_palette_check = QCheckBox("Use converter palette", group)
         self.atari_palette_check.setToolTip(
-            "Checked: the exporters use the converted palette colours instead of these registers"
+            "Checked: the registers follow the converted palette, mapped to the nearest Atari colours"
         )
         self.atari_palette_check.toggled.connect(self._on_atari_mode_toggled)
         layout.addWidget(self.atari_palette_check)
@@ -382,12 +467,21 @@ class ParameterPanel(QWidget):
             spin.setRange(0, ATARI_REGISTER_MAX)
             spin.setDisplayIntegerBase(16)
             spin.setPrefix("$")
-            spin.setToolTip(f"GTIA colour register COLOR{index} (hex)")
+            spin.setToolTip(
+                f"COLOR{index} shadow (hex), written to {GTIA_REGISTERS[index]}"
+            )
             spin.valueChanged.connect(self._on_value_changed)
             self.atari_color_spins.append(spin)
-            registers.addWidget(QLabel(f"COLOR{index}", group), index // 3, (index % 3) * 2)
-            registers.addWidget(spin, index // 3, (index % 3) * 2 + 1)
+            target = QLabel(f"COLOR{index} → {GTIA_REGISTERS[index]}", group)
+            target.setToolTip(f"Shadows $02C{4 + index} and feeds {GTIA_REGISTERS[index]}")
+            registers.addWidget(target, index // 3, ((index % 3) * 3))
+            registers.addWidget(spin, index // 3, ((index % 3) * 3) + 1)
+            registers.setColumnStretch(((index % 3) * 3) + 2, 1)
         layout.addLayout(registers)
+
+        self.atari_status = QLabel(group)
+        self.atari_status.setWordWrap(True)
+        layout.addWidget(self.atari_status)
         return group
 
     # --- state ----------------------------------------------------------
@@ -399,6 +493,9 @@ class ParameterPanel(QWidget):
             self.width_spin.setValue(cfg.width)
             self.height_spin.setValue(cfg.height)
             self._select_data(self.resize_combo, cfg.resize)
+            self._select_data(self.aspect_combo, cfg.aspect)
+            self.pixel_aspect_spin.setValue(self._displayed_pixel_aspect(cfg))
+
             self.sharpen_check.setChecked(cfg.sharpen)
             self.sharpen_strength_spin.setValue(cfg.sharpen_strength)
             self._select_data(self.palette_combo, cfg.palette)
@@ -410,6 +507,10 @@ class ParameterPanel(QWidget):
             self.atari_palette_check.setChecked(cfg.atari_colors is None)
             for index, spin in enumerate(self.atari_color_spins):
                 spin.setValue(_atari_register(cfg.atari_colors, index))
+            if cfg.atari_colors is not None:
+                self._manual_registers = [
+                    spin.value() for spin in self.atari_color_spins
+                ]
         self._refresh_enabled_states()
         self._update_background_swatch()
 
@@ -418,6 +519,9 @@ class ParameterPanel(QWidget):
         custom = self.selected_target.is_custom
         self.width_spin.setEnabled(custom)
         self.height_spin.setEnabled(custom)
+        self.pixel_aspect_spin.setEnabled(
+            custom and self._selected(self.aspect_combo, AspectMode) is not AspectMode.DISABLED
+        )
         self.sharpen_strength_spin.setEnabled(self.sharpen_check.isChecked())
         self.quantizer_combo.setEnabled(
             self._selected(self.dither_combo, DitherMethod) is DitherMethod.NONE
@@ -425,6 +529,9 @@ class ParameterPanel(QWidget):
         use_converter_palette = self.atari_palette_check.isChecked()
         for spin in self.atari_color_spins:
             spin.setEnabled(not use_converter_palette)
+        self._apply_derived_registers()
+        self._update_atari_status()
+        self._update_aspect_hint()
 
     def _effective_png_only(self) -> bool:
         """Explicit flag if set, otherwise derived from the carried export formats."""
@@ -449,6 +556,100 @@ class ParameterPanel(QWidget):
             return None
         return [spin.value() for spin in self.atari_color_spins]
 
+    def _pixel_aspect_override(self) -> float | None:
+        """Explicit PAL pixel aspect, which only a Custom size can carry.
+
+        A preset always resolves its factor from :data:`converter.aspect.PAL_SCREENS`, so switching
+        between ANTIC D/E/F really does change the value instead of leaving a stale copy behind.
+        """
+        if not self.selected_target.is_custom:
+            return None
+        value = round(self.pixel_aspect_spin.value(), 2)
+        return value if value > 0.0 else None
+
+    @staticmethod
+    def _displayed_pixel_aspect(cfg: ConversionConfig) -> float:
+        """The factor to show in the spin box (``0.0`` when nothing is known or set)."""
+        factor = pixel_aspect_for(cfg.width, cfg.height, cfg.pixel_aspect)
+        return 0.0 if factor is None else factor
+
+    def _atari_automatic(self) -> bool:
+        """True while the registers follow the converted palette (the checkbox is on)."""
+        return self.atari_palette_check.isChecked()
+
+    def _atari_mode(self) -> str | None:
+        """ANTIC mode the export of the conversion on screen would use (``None`` when unknown)."""
+        width, height = (
+            self._palette_size
+            if self._palette_size is not None
+            else (self.width_spin.value(), self.height_spin.value())
+        )
+        try:
+            return mode_for_size(width, height)
+        except ValueError:
+            return None
+
+    def _apply_derived_registers(self) -> None:
+        """Show the values the export will really write while the converter palette is used.
+
+        The panel only mirrors what :func:`converter.hardware_colors.resolved_registers` computes for
+        the result on screen - the mapping itself lives in the core, so the two cannot disagree.
+        """
+        if not self._atari_automatic() or self._palette_colors is None:
+            return
+        mode = self._atari_mode()
+        if mode is None:
+            return
+        derived = derived_registers(self._palette_colors, mode)
+        with self._signals_blocked():
+            for spin, value in zip(self.atari_color_spins, derived, strict=True):
+                spin.setValue(value)
+
+    def _update_atari_status(self) -> None:
+        """Say where the values come from, without adding another control."""
+        mode = self._atari_mode()
+        if not self._atari_automatic():
+            self.atari_status.setText(
+                "Manual: these values are written to COLOR0-COLOR4 as they are."
+            )
+            return
+        if self._palette_colors is None:
+            self.atari_status.setText(
+                "Automatic: nearest Atari colours of the converted palette - shown after the first "
+                "conversion."
+            )
+            return
+        colours = len(self._palette_colors)
+        text = (
+            f"Automatic: {colours} converted palette colour(s) mapped to the nearest Atari "
+            "colours (CIE94 match on the measured PAL palette)."
+        )
+        self.atari_status.setText(text + " " + _ATARI_LAYOUT_HINTS.get(mode, ""))
+
+    def _update_aspect_hint(self) -> None:
+        """Say what the selected mode does with the current size, without guessing a factor."""
+        mode = self._selected(self.aspect_combo, AspectMode)
+        if mode is AspectMode.DISABLED:
+            self.aspect_hint.setText(
+                "The image is stretched onto the whole target grid - no proportions are preserved."
+            )
+            return
+        width = self.width_spin.value()
+        height = self.height_spin.value()
+        pixel_aspect = pixel_aspect_for(width, height, self._pixel_aspect_override())
+        if pixel_aspect is None:
+            self.aspect_hint.setText(
+                f"No PAL pixel aspect is known for {width}×{height}: the correction stays off. "
+                "Pick a preset or set the pixel aspect above."
+            )
+            return
+        screen = pal_screen(width, height)
+        source = f"{screen.name}, " if screen is not None else ""
+        self.aspect_hint.setText(
+            f"PAL pixel aspect {pixel_aspect:g}:1 ({source}{width}×{height}). "
+            "The result preview shows it at this shape."
+        )
+
     # --- slots ----------------------------------------------------------
 
     def _on_target_changed(self, *_: object) -> None:
@@ -459,12 +660,18 @@ class ParameterPanel(QWidget):
                 self.width_spin.setValue(updated.width)
                 self.height_spin.setValue(updated.height)
                 self.colors_spin.setValue(updated.colors)
+                # The factor follows the target, it is never carried over from another geometry.
+                self.pixel_aspect_spin.setValue(target.pixel_aspect or 0.0)
         self._refresh_enabled_states()
         self._emit()
 
     def _on_size_changed(self, *_: object) -> None:
+        """A custom size starts with its table factor, or with none at all - never a stale one."""
         with self._signals_blocked():
             self._select_target(CUSTOM)
+            self.pixel_aspect_spin.setValue(
+                pixel_aspect_for(self.width_spin.value(), self.height_spin.value()) or 0.0
+            )
         self._refresh_enabled_states()
         self._emit()
 
@@ -476,7 +683,24 @@ class ParameterPanel(QWidget):
         self._refresh_enabled_states()
         self._emit()
 
+    def _on_aspect_changed(self, *_: object) -> None:
+        self._refresh_enabled_states()
+        self._emit()
+
+    def _on_pixel_aspect_changed(self, *_: object) -> None:
+        self._update_aspect_hint()
+        self._emit()
+
     def _on_atari_mode_toggled(self, *_: object) -> None:
+        """Switch between automatic and manual registers without losing the manual values."""
+        if self._atari_automatic():
+            self._manual_registers = [spin.value() for spin in self.atari_color_spins]
+        else:
+            with self._signals_blocked():
+                for spin, value in zip(
+                    self.atari_color_spins, self._manual_registers, strict=True
+                ):
+                    spin.setValue(value)
         self._refresh_enabled_states()
         self._emit()
 
@@ -540,6 +764,8 @@ class ParameterPanel(QWidget):
             self.target_combo,
             self.width_spin,
             self.height_spin,
+            self.aspect_combo,
+            self.pixel_aspect_spin,
             self.resize_combo,
             self.sharpen_check,
             self.sharpen_strength_spin,

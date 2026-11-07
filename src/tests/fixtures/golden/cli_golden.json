@@ -18,8 +18,8 @@
           "size": 1338
         },
         "screen.s": {
-          "sha256": "ccf99acf90c87753d9c7cbc5d08d9bfb0fa3aedbef897db58017d94b217285ee",
-          "size": 43414
+          "sha256": "930e1aed29d8343fc97626106184290c44db1c75c536706829019991d8fa42c7",
+          "size": 43426
         },
         "screen.xex": {
           "sha256": "8358756a5e3a5e88224668c4b5dc70f3312f42cfd8deb68f3544a40984aa969a",
@@ -339,7 +339,7 @@
       ],
       "files": {
         "preview_d.xex": {
-          "sha256": "fad0ef28137e60ffaced830e80eb64623bb2cd8a07932f768c81b12e5836033d",
+          "sha256": "d5663caed10565cdde00081f5a6c7e2c249dd88be845e1abc6117a198c0c84ac",
           "size": 4007
         },
         "screen.png": {
@@ -364,7 +364,7 @@
       ],
       "files": {
         "preview_e.xex": {
-          "sha256": "f3a2abbddd0f618cfd35278b55b30c6c20db37fc5870faa241c5f85b9a048a9d",
+          "sha256": "dad3c93942127e68f60db35c48048ad1c114197953aaa893e2f6af2affa259e4",
           "size": 7879
         },
         "screen.bin": {

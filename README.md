@@ -96,7 +96,7 @@ Supported export formats:
 | `--export` | `png`, `bin`, `asm`, `dta`, `xex` (repeatable) | (inferred) | Export format. Repeat flag for multiple formats. |
 | `--xex`, `-x` | Path | None | Explicit output path for Atari executable preview (.xex). |
 | `--antic-mode`, `-m` | `D`, `E`, `F`, `7`, `15`, `8` | (auto) | ANTIC mode for XEX preview. |
-| `--atari-colors` | Comma-separated hex | None | Override color registers in XEX (e.g. `0x00,0x04,0x0a,0x0e`). |
+| `--atari-colors` | Comma-separated hex | None | Override `COLOR0-COLOR4` (`COLPF0, COLPF1, COLPF2, COLPF3, COLBK`) in XEX/ASM (e.g. `0x00,0x04,0x0a,0x0e`); without it the registers follow the converted palette. |
 | `--config` | Path | None | Path to a JSON configuration file to load settings. |
 | `--save-config` | Path | None | Path to save current pipeline settings as a JSON config file. |
 
@@ -125,11 +125,14 @@ load Qt.
 
 - **Open** an image with *File > Open* (`Ctrl+O`) or drop it onto the window (PNG, BMP, GIF, JPG).
 - **Parameters**: a target preset (ANTIC E 160×192 and 160×190, ANTIC D 160×96, ANTIC F 320×192, or
-  *Custom*) plus width/height, resize, sharpen and its strength, palette, colours, background index,
-  dithering, quantizer, and the five hardware colour registers (used by the ASM/XEX exporters only).
+  *Custom*) plus width/height, aspect ratio correction, resize, sharpen and its strength, palette,
+  colours, background index, dithering, quantizer, and the five hardware colour registers with their
+  *Use converter palette* switch (see [Hardware colour registers](#hardware-colour-registers-xex-and-asm-exports)).
 - **Previews**: the resized source and the Atari result side by side, zoomed in 1×/2×/4×/8× steps
   (`Ctrl`+wheel also zooms), panned by dragging, with both views kept in sync. *Fit* scales the image into
   the window; a newly opened image is fitted, while later conversions keep the zoom and position you chose.
+  With the aspect ratio correction on, the result view also shows the non-square pixels of the selected
+  mode, so it looks the way it will look on a PAL monitor; the source view stays at square pixels.
 - **Conversions**: *Auto-update* (on by default, 300 ms debounce) reconverts after each parameter change;
   switch it off to convert only when you press *Convert* (`Ctrl+Return`). The badge above the previews and
   the status bar name the state - `ready (gen N)`, `stale - showing gen M`, `updating… (gen N)` or
@@ -137,6 +140,28 @@ load Qt.
   failed conversion keeps the last good image and metrics and shows a dismissible one-line error.
 - **Diagnostics**: the *Metrics* and *Stage timings* sections start collapsed and open on a click; *Copy*
   puts the whole report (metrics plus per-stage timings) on the clipboard.
+
+### PAL aspect ratio correction
+
+Atari pixels are not square, so stretching an image onto the target grid changes the proportions of
+everything in it. The *Aspect Ratio Correction* section fixes that before any colour work happens, using
+the pixel aspect ratio of the selected mode (Altirra Hardware Reference Manual, "Pixel Aspect Ratios"):
+
+| Mode | Grid | Pixel aspect (PAL) |
+| :--- | ---: | ---: |
+| ANTIC D | 160 × 96 | 1.04 : 1 |
+| ANTIC E | 160 × 192 (and 160 × 190) | 2.08 : 1 |
+| ANTIC F | 320 × 192 | 1.04 : 1 |
+
+- *Disabled* (the default) keeps the previous behaviour: the image is stretched onto the whole grid.
+- *Preserve Aspect Ratio (Fit)* keeps the whole image and fills the margins with the conversion's
+  background colour.
+- *Preserve Aspect Ratio (Crop)* fills the grid and trims the image where it overflows.
+
+A *Custom* size has no hardware geometry, so the panel reports that the correction stays off until you
+enter a pixel aspect (or pick a preset). The same two settings are available to the CLI through a JSON
+configuration - `"aspect": "fit"` or `"crop"` plus an optional `"pixel_aspect": 1.5` - and are simply
+absent from a configuration that does not use them.
 
 ### Export
 
@@ -175,10 +200,40 @@ and the last folder is remembered for the session.
   has no GUI equivalent yet), and preview images (`--preview`) and a custom ASM label are CLI-only.
 - Sizes outside the presets are possible (*Custom*), but the Atari formats then refuse to export until the
   result matches what the hardware can display.
+- Only PAL is modelled (no PAL/NTSC switch), and a *Custom* size needs an explicit pixel aspect before the
+  correction does anything - the panel says so instead of guessing a factor.
 
 Implementation details and the responsiveness measurements live in
 [docs/GUI_IMPLEMENTATION_PLAN.md](docs/GUI_IMPLEMENTATION_PLAN.md) and
 [docs/GUI_PERFORMANCE.md](docs/GUI_PERFORMANCE.md).
+
+---
+
+## Hardware colour registers (XEX and ASM exports)
+
+The Atari has no RGB palette: a colour is a byte with a hue (high nibble) and a luminance (low nibble),
+so the RGB colours of a conversion have to be matched to the 256 hardware colours. The XEX viewer
+cannot show anything without those values, which is why the exporters always write them:
+
+- *Use converter palette* (the default in the GUI) maps every colour of the converted palette to the
+  nearest measured PAL colour with the CIE94 match of the `rgb2a8` tool and shows the result in the
+  section, so what you see is what the `.xex` contains.
+- Clearing the checkbox makes the fields editable; those values are written as they are and are never
+  overwritten by a new conversion.
+- The CLI does the same through `--atari-colors` (override) or a JSON configuration; without either
+  the registers follow the converted palette.
+
+`COLOR0` .. `COLOR4` are the OS shadows of `COLPF0`, `COLPF1`, `COLPF2`, `COLPF3` and `COLBK`. Which
+palette colour lands where depends on the mode (`docs/XEX_COLOR_REGISTERS.md`):
+
+| Mode | Palette colour 0 | 1 | 2 | 3 |
+| :--- | :--- | :--- | :--- | :--- |
+| ANTIC D / E | `COLOR4` (COLBK) | `COLOR0` (COLPF0) | `COLOR1` (COLPF1) | `COLOR2` (COLPF2) |
+| ANTIC F | `COLOR4` (COLBK, border) | `COLOR1` luminance | `COLOR2` hue + background luminance | – |
+
+Mode F can only display two luminances of one hue, so its mapping keeps the foreground hue and both
+luminances. The ASM export writes the same bytes, but only when they are configured explicitly - the
+screen data alone is the default output of that format.
 
 ---
 
@@ -296,6 +351,8 @@ py-image-converter/
 └── src/
     ├── converter/
     │   ├── main.py            # CLI argument parsing and configuration orchestration
+    │   ├── aspect.py          # PAL pixel aspect ratio correction (geometry stage)
+    │   ├── atari_match.py     # RGB -> nearest measured Atari colour (rgb2a8 port)
     │   ├── config.py          # JSON configuration load/save utils
     │   ├── pipeline.py        # Pipeline execution workflow manager
     │   ├── types.py           # Shared data containers and types
@@ -303,6 +360,7 @@ py-image-converter/
     │   ├── resize.py          # Nearest, Bilinear, Bicubic, Lanczos methods
     │   ├── sharpen.py         # Unsharp masking post-processing
     │   ├── histogram.py       # RGB/HSV/Luminance histogram & variance analyser
+    │   ├── hardware_colors.py # COLOR0-COLOR4 arrangement for the XEX/ASM exports
     │   ├── edge_detect.py     # Edge detection (Sobel, Laplacian)
     │   ├── palette.py         # 4-color palette generation (Popularity, Kmeans, Octree, etc.)
     │   ├── atari_palette.py   # Full Atari hardware palette with color specs

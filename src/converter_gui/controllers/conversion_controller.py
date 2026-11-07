@@ -44,6 +44,8 @@ IMAGE_KEY_FIELDS = (
     "width",
     "height",
     "resize",
+    "aspect",
+    "pixel_aspect",
     "sharpen",
     "sharpen_strength",
     "palette",

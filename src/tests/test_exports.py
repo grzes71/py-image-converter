@@ -14,6 +14,7 @@ from converter.exporters.atari_dta_export import export_dta
 from converter.exporters.compat import check_export_compatibility
 from converter.exporters.png_export import export_png
 from converter.exporters.xex_export import export_xex, normalize_antic_mode
+from converter.hardware_colors import resolved_registers
 from converter.pipeline import convert_image, export_result
 from converter.types import (
     ConversionConfig,
@@ -394,7 +395,8 @@ def test_export_result_forwards_antic_mode_to_xex(
         direct,
         palette_indices=result.palette_indices,
         antic_mode="D",
-        atari_colors=config.atari_colors,
+        # ``export_result`` resolves the registers itself (manual values or the rgb2a8 mapping).
+        atari_colors=resolved_registers(result, config, "D"),
     )
     assert (tmp_path / "explicit" / "screen.xex").read_bytes() == direct.read_bytes()
 
